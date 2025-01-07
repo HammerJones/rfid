@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{btree_map::Values, HashMap};
 
 #[path="./input.rs"]
 mod input;
@@ -32,21 +32,38 @@ impl Task {
 
         self.boat_name = cap_input();
     }
-    pub fn query_tasks(&mut self) {
+    pub fn query_tasks(&mut self, roster: Vec<Employee>) {
         let input: String;
     
-        print!("Please enter Task Number for {}: ", self.boat_name);
+        print!("Please enter Task Number for this roster on {}: ", self.boat_name);
         clear_screen();
-        input = cap_input();
-    
-        self.task_numbers.push(input);
+
+        self.task_hash.insert(cap_input(), roster);
+    }
+    pub fn query_employee_roster(&mut self) -> Vec<Employee> {
+        let mut new_roster: Vec<Employee> = Vec::new();
+
+        print!("Would you like to create an employee roster for this Task Number? [y/n]");
+        clear_screen();
+        while cap_input() == "y" {
+            let mut new_employee: Employee = Employee::new();
+            new_employee.query_employee();
+
+            new_roster.push(new_employee);
+
+            print!("Would you like to enter another Employee? [y/n]: ");
+            clear_screen();
+        }
+
+        new_roster
     }
     pub fn create_tasks_vec(&mut self) {
-        print!("Would you like to enter a new Task Number? [y/n]: ");
+        print!("Would you like to enter a new Task Number and/or Employee Roster? [y/n]: ");
         clear_screen();
         while cap_input() == "y" {
             flush_output();
-            self.query_tasks();
+            let local_query = Task::query_employee_roster(self);
+            self.query_tasks(local_query);
             print!("Would you like to enter a new Task Number? [y/n]: ");
             clear_screen();
         }
@@ -55,6 +72,20 @@ impl Task {
             i += 1;
             print!("Task[{:?}]: {}\n", i, item);
             clear_screen();
+        }
+    }
+    pub fn display_boat_info(&mut self) {
+        print!("Boat Name: {}\n", self.boat_name);
+        clear_screen();
+
+        for (key, value) in &self.task_hash {
+            print!("Task Number: {}\nRoster:\n", key);
+            clear_screen();
+
+            for item in value {
+                print!("{} {} - {}\n", item.first_name, item.last_name, item.department);
+                clear_screen();
+            }
         }
     }
 }

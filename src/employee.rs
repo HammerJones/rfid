@@ -6,11 +6,11 @@ use input::*;
 
 #[derive(Iterable)]
 pub struct Employee {
-    first_name: String,
-    last_name: String,
-    department: String,
-    id_number: String,
-    internal_number: String,
+    pub first_name: String,
+    pub last_name: String,
+    pub department: String,
+    pub id_number: String,
+    pub internal_number: String,
 }
 
 impl Employee {

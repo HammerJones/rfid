@@ -16,6 +16,7 @@ fn test_boat() {
 
     boat1.query_boat();
     boat1.create_tasks_vec();
+    boat1.display_boat_info();
 }
 
 #[allow(dead_code)]
@@ -27,5 +28,5 @@ fn test_employee() {
 }
 
 fn main() {
-    
+    test_boat();
 }
