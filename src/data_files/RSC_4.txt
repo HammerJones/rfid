@@ -1,0 +1,21 @@
+{
+  "boat_name": "RSC_4",
+  "task_numbers": [],
+  "task_hash": {
+    "1004": [
+      {
+        "first_name": "Jose",
+        "last_name": "Vasquez",
+        "department": "Welders",
+        "id_number": "190"
+      },
+      {
+        "first_name": "Elias",
+        "last_name": "",
+        "department": "Welders",
+        "id_number": "098"
+      }
+    ]
+  },
+  "menu": {}
+}

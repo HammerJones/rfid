@@ -123,7 +123,7 @@ impl Task {
     }
     pub fn write_to_json_file(&self) -> std::io::Result<()> {
         let json = serde_json::to_string_pretty(&self)?;
-        let file_name = format!("{}.txt", self.boat_name);
+        let file_name = format!("./src/data_files/{}.txt", self.boat_name);
         let mut file = OpenOptions::new()
             .create(true)
             .write(true)
@@ -138,6 +138,17 @@ impl Task {
         file.read_to_string(&mut json)?;
         let task: Task = serde_json::from_str(&json)?;
         Ok(task)
+    }
+    pub fn find_employee_by_id(file_path: &str, id_number: &str) -> std::io::Result<Option<Employee>> {
+        let task = Task::read_from_json_file(file_path)?;
+        for employees in task.task_hash.values() {
+            for employee in employees {
+                if employee.id_number == id_number {
+                    return Ok(Some(employee.clone()));
+                }
+            }
+        }
+        Ok(None)
     }
     /* -------------------------- */
     /* ----- Menu Functions ----- */

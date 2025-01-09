@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 mod input;
 use input::*;
 
-#[derive(Iterable, Serialize, Deserialize)]
+#[derive(Iterable, Serialize, Deserialize,Clone)]
 pub struct Employee {
     pub first_name: String,
     pub last_name: String,
