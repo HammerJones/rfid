@@ -2,6 +2,20 @@
   "boat_name": "Azteca",
   "task_numbers": [],
   "task_hash": {
+    "1008": [
+      {
+        "first_name": "Nick",
+        "last_name": "Carolotto",
+        "department": "Coaching",
+        "id_number": "420"
+      },
+      {
+        "first_name": "Chris",
+        "last_name": "Hemsworth",
+        "department": "Played thor",
+        "id_number": "109"
+      }
+    ],
     "1001": [
       {
         "first_name": "Sean",
@@ -26,14 +40,6 @@
         "last_name": "BalBoland",
         "department": "Mice Acquisitions Dept.",
         "id_number": "569"
-      }
-    ],
-    "1008": [
-      {
-        "first_name": "Nick",
-        "last_name": "Carolotto",
-        "department": "Coaching",
-        "id_number": "420"
       }
     ]
   },

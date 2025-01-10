@@ -50,33 +50,76 @@ impl Menu {
         print!("Please select from the following options:\n");
         print!("[1] - Add Boat\n");
         print!("[2] - Display Boat\n");
-        print!("[3] - Edit Task\n");
+        print!("[3] - Add Employee to Task\n");
         print!("[4] - Delete Task\n");
         print!("[5] - Search Employee\n");
         print!("[6] - Exit\n");
         clear_screen();
 
-        let mut option = cap_input().parse().unwrap();
+        self.get_menu_input();
+    }
+    pub fn get_menu_input(&self) {
+        let option = cap_input().parse().unwrap();
+        clear_screen();
         match option {
             1 => {
-               let mut new_boat = Task::new();
-               new_boat.construct_boat();
-               new_boat.write_to_json_file();
+                flush_output();
+                let mut new_boat = Task::new();
+                new_boat.construct_boat();
+                new_boat.write_to_json_file();
+
+                self.display_main_menu();
             }
             2 => {
-                print!("Display Boat\n");
+                print!("Display Boat Menu\n\n");
+                print!("Please Enter Boat Name: ");
+                clear_screen();
+
+                let file_path= String::from("./src/data_files/".to_owned() + &cap_input() + ".txt");
+                let mut boat = Task::read_from_json_file(&file_path).unwrap();
+                flush_output();
+                boat.display_boat_info();
+
+                print!("Press [Enter] to return to main menu");
+                clear_screen();
+                let pause = cap_input();
+                
+
+                self.display_main_menu();
             }
             3 => {
-                print!("Edit Task\n");
+                print!("Add Employee to Task Number\n\n");
+                clear_screen();
+
+                let file_path= String::from("./src/data_files/".to_owned() + &cap_input() + ".txt");
+                let mut boat = Task::read_from_json_file(&file_path).unwrap();
+
+                boat.display_boat_info();
+                Task::append_employee_to_task(&file_path);
+
+                self.display_main_menu();
             }
             4 => {
                 print!("Delete Task\n");
             }
             5 => {
-                print!("Search Employee\n");
+                print!("Search Employee\n\n");
+                print!("Please Enter the Employee ID You Wish to Search: ");
+                clear_screen();
+                let id_number= &cap_input();
+                let boat = Task::find_employee_by_id(id_number).unwrap();
+
+                boat.unwrap().display_boat_info();
+                print!("Press any key to return to main menu");
+                clear_screen();
+                let pause = cap_input();
+                
+
+                self.display_main_menu();
             }
             6 => {
                 print!("Exit\n");
+                std::process::exit(0);
             }
             _ => {
                 print!("Invalid option\n");
