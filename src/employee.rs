@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use struct_iterable::Iterable;
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 
@@ -8,12 +9,13 @@ use serde::{Deserialize, Serialize};
 mod input;
 use input::*;
 
-#[derive(Iterable, Serialize, Deserialize,Clone)]
+#[derive(Iterable, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct Employee {
     pub first_name: String,
     pub last_name: String,
     pub department: String,
     pub id_number: String,
+    pub task_number: String,
 }
 
 impl Employee {
@@ -24,6 +26,7 @@ impl Employee {
             last_name: String::new(),
             department: String::new(),
             id_number: String::new(),
+            task_number: String::from("Not Yet Initialized"),
         }
     }
 

@@ -1,5 +1,6 @@
 use core::task;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::fs::OpenOptions;
 use std::io; 
 use std::io::{Write, Read};
@@ -17,7 +18,7 @@ use employee::*;
 
 
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct Task {
     //pub file_path: String,
     pub boat_name: String,
@@ -195,5 +196,13 @@ impl Task {
             }
         }
         Ok(None)
+    }
+}
+
+impl Hash for Task {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.boat_name.hash(state);
+        self.task_numbers.hash(state);
+        // Note: You may need to hash other fields if they are relevant for equality
     }
 }

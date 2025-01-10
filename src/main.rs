@@ -22,14 +22,15 @@ use employee::*;
 mod menu;
 use menu::*;
 
-
+mod roster;
+use roster::*;
 
 #[allow(dead_code)]
 
 fn main() {
-    let file = String::from("./src/data_files/Azteca.txt");
-    let mut boat2 = Task::read_from_json_file(&file).unwrap();
+    //let menu = Menu::new();
+    //menu.display_main_menu();
 
-    let menu = Menu::new();
-    menu.display_main_menu();
+    let mut roster = Roster::new();
+    roster.display_menu();
 }

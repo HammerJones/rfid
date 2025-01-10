@@ -15,6 +15,59 @@ enum MainMenu {
 }
 
 impl Menu {
+    fn add_boat(&self) {
+        flush_output();
+                let mut new_boat = Task::new();
+                new_boat.construct_boat();
+                new_boat.write_to_json_file();
+
+                self.display_main_menu();
+    }
+    fn display_boat(&self) {
+        print!("Display Boat Menu\n\n");
+            print!("Please Enter Boat Name: ");
+            clear_screen();
+            let file_path= String::from("./src/data_files/".to_owned() + &cap_input() + ".txt");
+            let mut boat = Task::read_from_json_file(&file_path).unwrap();
+            flush_output();
+            boat.display_boat_info();
+            print!("Press [Enter] to return to main menu");
+            clear_screen();
+            let pause = cap_input();
+            
+            self.display_main_menu();
+    }
+    fn add_employee_to_task(&self) {
+        print!("Add Employee to Task Number\n\n");
+            clear_screen();
+            let file_path= String::from("./src/data_files/".to_owned() + &cap_input() + ".txt");
+            let mut boat = Task::read_from_json_file(&file_path).unwrap();
+            boat.display_boat_info();
+            Task::append_employee_to_task(&file_path);
+            self.display_main_menu();
+    }
+    fn delete_task(&self) {
+        print!("Add Employee to Task Number\n\n");
+            clear_screen();
+            let file_path= String::from("./src/data_files/".to_owned() + &cap_input() + ".txt");
+            let mut boat = Task::read_from_json_file(&file_path).unwrap();
+            boat.display_boat_info();
+            Task::append_employee_to_task(&file_path);
+            self.display_main_menu();
+    }
+    fn search_employee(&self) {
+        print!("Search Employee\n\n");
+            print!("Please Enter the Employee ID You Wish to Search: ");
+            clear_screen();
+            let id_number= &cap_input();
+            let boat = Task::find_employee_by_id(id_number).unwrap();
+            boat.unwrap().display_boat_info();
+            print!("Press any key to return to main menu");
+            clear_screen();
+            let pause = cap_input();
+            
+            self.display_main_menu();
+    }
     pub fn new() -> Self {
         Menu {
             menu_title: String::new(),
@@ -63,59 +116,19 @@ impl Menu {
         clear_screen();
         match option {
             1 => {
-                flush_output();
-                let mut new_boat = Task::new();
-                new_boat.construct_boat();
-                new_boat.write_to_json_file();
-
-                self.display_main_menu();
+                self.add_boat();
             }
             2 => {
-                print!("Display Boat Menu\n\n");
-                print!("Please Enter Boat Name: ");
-                clear_screen();
-
-                let file_path= String::from("./src/data_files/".to_owned() + &cap_input() + ".txt");
-                let mut boat = Task::read_from_json_file(&file_path).unwrap();
-                flush_output();
-                boat.display_boat_info();
-
-                print!("Press [Enter] to return to main menu");
-                clear_screen();
-                let pause = cap_input();
-                
-
-                self.display_main_menu();
+                self.display_boat();
             }
             3 => {
-                print!("Add Employee to Task Number\n\n");
-                clear_screen();
-
-                let file_path= String::from("./src/data_files/".to_owned() + &cap_input() + ".txt");
-                let mut boat = Task::read_from_json_file(&file_path).unwrap();
-
-                boat.display_boat_info();
-                Task::append_employee_to_task(&file_path);
-
-                self.display_main_menu();
+                self.add_employee_to_task();
             }
             4 => {
-                print!("Delete Task\n");
+                self.delete_task();
             }
             5 => {
-                print!("Search Employee\n\n");
-                print!("Please Enter the Employee ID You Wish to Search: ");
-                clear_screen();
-                let id_number= &cap_input();
-                let boat = Task::find_employee_by_id(id_number).unwrap();
-
-                boat.unwrap().display_boat_info();
-                print!("Press any key to return to main menu");
-                clear_screen();
-                let pause = cap_input();
-                
-
-                self.display_main_menu();
+                self.search_employee();
             }
             6 => {
                 print!("Exit\n");

@@ -443,6 +443,7 @@ dependencies = [
  "egui",
  "k_board",
  "serde",
+ "serde_derive",
  "serde_json",
  "serde_with",
  "struct_iterable",
