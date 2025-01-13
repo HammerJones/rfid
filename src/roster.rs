@@ -31,7 +31,10 @@ impl Roster {
         let i = cap_input();
     }
     pub fn add_employee(&mut self, task: Task, employee: Employee) {
-        self.roster.entry(task).or_insert_with(Vec::new).push(employee);
+        self.roster
+            .entry(task)
+            .or_insert_with(Vec::new)
+            .push(employee);
     }
 
     pub fn search_employee(&mut self, id_number: &str) -> Option<&Task> {
@@ -134,7 +137,7 @@ impl Roster {
                         print!("Would you like to create a new employee? (y/n): ");
                         clear_screen();
 
-                        
+
                     }
 
                     Roster::pause();

@@ -189,6 +189,7 @@ impl Task {
                 for employees in task.task_hash.values() {
                     for employee in employees {
                         if employee.id_number == id_number {
+                            employee.clone().print_employee_details();
                             return Ok(Some(task));
                         }
                     }

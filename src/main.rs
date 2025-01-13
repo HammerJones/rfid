@@ -28,9 +28,10 @@ use roster::*;
 #[allow(dead_code)]
 
 fn main() {
-    //let menu = Menu::new();
-    //menu.display_main_menu();
 
-    let mut roster = Roster::new();
-    roster.display_menu();
+    let menu = Menu::new();
+    menu.display_main_menu();
+
+    //let mut roster = Roster::new();
+    //roster.display_menu();
 }
