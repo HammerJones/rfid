@@ -36,9 +36,12 @@ fn is_hold(kind: &str) -> bool {
 /// Money moving between your own accounts. Counting these would double-count income and spending.
 pub fn is_transfer(kind: &str, desc: &str) -> bool {
     let text = format!("{} {}", kind, desc).to_ascii_lowercase();
+    // Paychecks: PayPal labels direct deposits "Electronic Funds Transfer Funding".
+    if ["direct deposit", "direct dep", "payroll", "electronic funds transfer funding"].iter().any(|p| text.contains(p)) {
+        return false;
+    }
     [
-        // PayPal: topping up from the bank, moving to/from the bank or PayPal savings
-        "funding",
+        // PayPal: moving money to/from the bank, a card or PayPal savings
         "bank deposit to pp",
         "card deposit",
         "card withdrawal",
@@ -478,8 +481,9 @@ mod sample {
         let m = monthly_totals(&t);
         let aug = m.values().next().unwrap();
         assert!((aug.money_out - 65.99).abs() < 0.001, "out {}", aug.money_out);
-        assert!((aug.money_in - 20.0).abs() < 0.001, "in {}", aug.money_in);
-        assert!((aug.transfers - 150.0).abs() < 0.001, "transfers {}", aug.transfers);
+        // Direct deposit (EFT Funding) + a friend's payment.
+        assert!((aug.money_in - 70.0).abs() < 0.001, "in {}", aug.money_in);
+        assert!((aug.transfers - 100.0).abs() < 0.001, "transfers {}", aug.transfers);
     }
 
     #[test]
