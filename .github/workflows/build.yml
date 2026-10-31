@@ -1,0 +1,54 @@
+# Builds the Windows .exe and the Android .apk on GitHub's free runners.
+# Push this folder to a GitHub repo, open the Actions tab, and download the artifacts.
+name: Build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libxkbcommon-dev
+      - run: cargo test
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: budget-windows
+          path: target/release/budget-app.exe
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install Android platform and build tools
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0"
+      - run: cargo install cargo-apk --locked
+      - name: Make a signing key (self-signed, fine for sideloading)
+        run: keytool -genkeypair -v -keystore "$RUNNER_TEMP/budget.keystore" -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Budget"
+      - name: Build APK
+        env:
+          ANDROID_NDK_ROOT: ${{ env.ANDROID_NDK_LATEST_HOME }}
+          CARGO_APK_RELEASE_KEYSTORE: ${{ runner.temp }}/budget.keystore
+          CARGO_APK_RELEASE_KEYSTORE_PASSWORD: android
+        run: cargo apk build --release --lib
+      - uses: actions/upload-artifact@v4
+        with:
+          name: budget-android
+          path: target/release/apk/*.apk
