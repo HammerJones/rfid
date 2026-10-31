@@ -43,19 +43,21 @@ jobs:
       - name: Make a signing key (self-signed, fine for sideloading)
         run: keytool -genkeypair -v -keystore "$RUNNER_TEMP/budget.keystore" -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Budget"
       - name: Build APK
+        shell: bash
         env:
-          ANDROID_NDK_ROOT: ${{ env.ANDROID_NDK_LATEST_HOME }}
           CARGO_APK_RELEASE_KEYSTORE: ${{ runner.temp }}/budget.keystore
           CARGO_APK_RELEASE_KEYSTORE_PASSWORD: android
-        shell: bash
         run: |
+          # The runner sets ANDROID_NDK_LATEST_HOME; cargo-apk looks for ANDROID_NDK_ROOT.
+          export ANDROID_NDK_ROOT="${ANDROID_NDK_ROOT:-$ANDROID_NDK_LATEST_HOME}"
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          echo "NDK: $ANDROID_NDK_ROOT"
+          echo "SDK: $ANDROID_SDK_ROOT"
           set -o pipefail
           if ! cargo apk build --release --lib 2>&1 | tee build.log; then
-            # Surface the real error as annotations so it's readable without the full log.
-            grep -E "^(error|Error)|error:|cannot find|not found|failed" build.log | head -40 | while IFS= read -r line; do
-              echo "::error::${line}"
-            done
-            tail -25 build.log | while IFS= read -r line; do echo "::error::tail: ${line}"; done
+            # Put the end of the log in one annotation so it's readable without the full log.
+            msg=$(grep -v "^ *Compiling\|^ *Downloaded\|^ *Downloading" build.log | tail -40 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=cargo apk build failed::${msg}"
             exit 1
           fi
       - uses: actions/upload-artifact@v4
