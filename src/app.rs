@@ -726,6 +726,16 @@ impl BudgetApp {
                 ui.end_row();
             }
         });
+        let moved: f64 = months.values().map(|t| t.transfers).sum();
+        if moved > 0.0 {
+            ui.label(
+                RichText::new(format!(
+                    "🔁 {} moved between your own accounts (bank top-ups, card payments, transfers) isn't counted as money in or out. Pending holds are skipped.",
+                    money(moved)
+                ))
+                .weak(),
+            );
+        }
         if months.len() > 1 {
             let avg_out: f64 = months.values().map(|t| t.money_out).sum::<f64>() / months.len() as f64;
             ui.label(format!("Average spending: {} per month. Partial first/last months pull this down.", money(avg_out)));

@@ -76,6 +76,8 @@ Download a CSV from your bank's website, usually under "Download transactions" o
 - `Transaction Date, ..., Description, ..., Debit, Credit`: Capital One and similar.
 - Files with no header row (date, amount, ..., description), as some banks export.
 
+PayPal activity exports (Activity > Statements > Download, CSV) also work. Pending rows and card authorization holds are skipped. Money moved between your own accounts doesn't count as money in or out: bank top-ups, transfers to and from the bank, credit card payments and autopay. The Bank tab shows that total separately.
+
 A payment counts as recurring when the same merchant charges on a regular schedule (weekly, every 2 weeks, monthly, every 3 months or yearly) for a similar amount. That means at least 2 charges, or 3 for weekly and biweekly. Grocery and gas trips vary too much to count, so they show up only in the spending breakdown. Payments that look like something already in your budget start unchecked.
 
 Try it with `tests/sample_statement.csv`.

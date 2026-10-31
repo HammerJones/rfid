@@ -16,12 +16,54 @@ pub struct Txn {
     pub description: String,
     /// Money out is positive, money in is negative.
     pub spent: f64,
+    /// Money moving between your own accounts (bank top-ups, card payments, transfers).
+    /// Not counted as income or spending.
+    pub transfer: bool,
 }
 
 impl Txn {
     pub fn is_spending(&self) -> bool {
-        self.spent > 0.0
+        self.spent > 0.0 && !self.transfer
     }
+}
+
+/// Rows that aren't real money movement: temporary card holds and their reversals.
+fn is_hold(kind: &str) -> bool {
+    let k = kind.to_ascii_lowercase();
+    k.contains("account hold") || k.contains("authorization") || k.contains("reversal of general account hold")
+}
+
+/// Money moving between your own accounts. Counting these would double-count income and spending.
+pub fn is_transfer(kind: &str, desc: &str) -> bool {
+    let text = format!("{} {}", kind, desc).to_ascii_lowercase();
+    [
+        // PayPal: topping up from the bank, moving to/from the bank or PayPal savings
+        "funding",
+        "bank deposit to pp",
+        "card deposit",
+        "card withdrawal",
+        "open wallet",
+        "reversal of ach",
+        "transfer to bank",
+        // Banks and cards
+        "transfer",
+        "xfer",
+        "card pymt",
+        "crd pymt",
+        "credit card payment",
+        "card payment",
+        "autopay",
+        "payment thank you",
+        "payment - thank you",
+    ]
+    .iter()
+    .any(|p| text.contains(p))
+}
+
+/// Statuses that mean the row actually happened.
+fn is_settled(status: &str) -> bool {
+    let s = status.trim().to_ascii_lowercase();
+    s.is_empty() || matches!(s.as_str(), "completed" | "complete" | "posted" | "cleared" | "settled" | "success" | "successful")
 }
 
 fn read_rows(text: &str) -> Result<Vec<Vec<String>>, String> {
@@ -85,21 +127,34 @@ pub fn parse_statement(text: &str) -> Result<Vec<Txn>, String> {
             if debit_c.is_none() && amount_c.is_none() {
                 return Err("Couldn't find an amount column (or Debit/Credit columns).".into());
             }
-            let mut raw: Vec<(NaiveDate, String, f64)> = Vec::new();
+            // Optional: transaction type (PayPal "Type", bank "Transaction Type") and status.
+            let lower: Vec<String> = headers.iter().map(|h| h.trim().to_ascii_lowercase()).collect();
+            let type_c = lower.iter().position(|h| h == "type" || h == "transaction type");
+            let status_c = lower.iter().position(|h| h == "status");
+            let mut raw: Vec<(NaiveDate, String, f64, bool)> = Vec::new();
             for r in &rows[h + 1..] {
                 let Some(date) = parse_date(get(r, date_c)) else { continue };
-                let desc = get(r, desc_c).to_string();
+                let kind = type_c.map(|c| get(r, c)).unwrap_or("");
+                // Skip pending rows and temporary holds; they reverse or post later.
+                if status_c.is_some_and(|c| !is_settled(get(r, c))) || is_hold(kind) {
+                    continue;
+                }
+                let mut desc = get(r, desc_c).trim().to_string();
+                if desc.is_empty() || desc.eq_ignore_ascii_case("paypal") {
+                    desc = if kind.is_empty() { desc } else { kind.to_string() };
+                }
+                let transfer = is_transfer(kind, &desc);
                 let value = match (debit_c, credit_c) {
                     (Some(d), Some(c)) if amount_c.is_none() || d != c => {
                         let out = parse_money(get(r, d)).map(f64::abs).unwrap_or(0.0);
                         let inn = parse_money(get(r, c)).map(f64::abs).unwrap_or(0.0);
                         // Already in "spent" convention.
-                        raw.push((date, desc, out - inn));
+                        raw.push((date, desc, out - inn, transfer));
                         continue;
                     }
                     _ => parse_money(get(r, amount_c.unwrap())).unwrap_or(0.0),
                 };
-                raw.push((date, desc, value));
+                raw.push((date, desc, value, transfer));
             }
             // Single amount column: decide which sign means spending.
             if debit_c.is_none() || credit_c.is_none() {
@@ -107,12 +162,12 @@ pub fn parse_statement(text: &str) -> Result<Vec<Txn>, String> {
                 let pos = raw.len() - neg;
                 // Bank accounts: most rows are negative purchases. Card exports: most rows are positive charges.
                 let flip = neg >= pos;
-                for (d, s, v) in raw {
-                    txns.push(Txn { date: d, description: s, spent: if flip { -v } else { v } });
+                for (d, s, v, transfer) in raw {
+                    txns.push(Txn { date: d, description: s, spent: if flip { -v } else { v }, transfer });
                 }
             } else {
-                for (d, s, v) in raw {
-                    txns.push(Txn { date: d, description: s, spent: v });
+                for (d, s, v, transfer) in raw {
+                    txns.push(Txn { date: d, description: s, spent: v, transfer });
                 }
             }
         }
@@ -129,7 +184,9 @@ pub fn parse_statement(text: &str) -> Result<Vec<Txn>, String> {
                 .ok_or("Couldn't find descriptions in this file.")?;
             for r in &rows {
                 let (Some(date), Some(v)) = (parse_date(get(r, date_c)), parse_money(get(r, amount_c))) else { continue };
-                txns.push(Txn { date, description: get(r, desc_c).to_string(), spent: -v });
+                let desc = get(r, desc_c).to_string();
+                let transfer = is_transfer("", &desc);
+                txns.push(Txn { date, description: desc, spent: -v, transfer });
             }
         }
     }
@@ -288,6 +345,8 @@ fn title_case(s: &str) -> String {
 pub struct MonthTotals {
     pub money_in: f64,
     pub money_out: f64,
+    /// Moved between your own accounts; not counted in or out.
+    pub transfers: f64,
 }
 
 /// Money in and out per calendar month (key = first of month).
@@ -296,7 +355,9 @@ pub fn monthly_totals(txns: &[Txn]) -> BTreeMap<NaiveDate, MonthTotals> {
     for t in txns {
         let k = NaiveDate::from_ymd_opt(t.date.year(), t.date.month(), 1).unwrap();
         let e = m.entry(k).or_default();
-        if t.spent > 0.0 {
+        if t.transfer {
+            e.transfers += t.spent.abs();
+        } else if t.spent > 0.0 {
             e.money_out += t.spent;
         } else {
             e.money_in += -t.spent;
@@ -388,6 +449,7 @@ mod tests {
 
 #[cfg(test)]
 mod sample {
+    use super::*;
     #[test]
     fn sample_statement_finds_bills() {
         let t = super::parse_statement(include_str!("../tests/sample_statement.csv")).unwrap();
@@ -397,5 +459,33 @@ mod sample {
             assert!(names.contains(&want), "missing {want}: {names:?}");
         }
         assert!(!names.iter().any(|n| n.starts_with("KING") || n.starts_with("CORVUS") || n.starts_with("CONOCO")), "{names:?}");
+    }
+
+    #[test]
+    fn paypal_holds_and_transfers_are_not_income_or_spending() {
+        let text = "\u{feff}\"Date\",\"Time\",\"TimeZone\",\"Name\",\"Type\",\"Status\",\"Currency\",\"Amount\",\"Fees\",\"Total\"
+\"08/01/2026\",\"10:00:00\",\"MDT\",\"GROCERY MART\",\"Account Hold for Open Authorization\",\"Pending\",\"USD\",\"-50.00\",\"0.00\",\"-50.00\"
+\"08/01/2026\",\"10:00:01\",\"MDT\",\"\",\"Electronic Funds Transfer Funding\",\"Completed\",\"USD\",\"50.00\",\"0.00\",\"50.00\"
+\"08/02/2026\",\"09:00:00\",\"MDT\",\"GROCERY MART\",\"Reversal of General Account Hold\",\"Completed\",\"USD\",\"50.00\",\"0.00\",\"50.00\"
+\"08/02/2026\",\"09:00:01\",\"MDT\",\"GROCERY MART\",\"General PayPal Debit Card Transaction\",\"Completed\",\"USD\",\"-50.00\",\"0.00\",\"-50.00\"
+\"08/05/2026\",\"09:00:00\",\"MDT\",\"STREAMING CO\",\"PreApproved Payment Bill User Payment\",\"Completed\",\"USD\",\"-15.99\",\"0.00\",\"-15.99\"
+\"08/06/2026\",\"09:00:00\",\"MDT\",\"\",\"General Card Withdrawal\",\"Completed\",\"USD\",\"-100.00\",\"0.00\",\"-100.00\"
+\"08/07/2026\",\"09:00:00\",\"MDT\",\"A FRIEND\",\"Mobile Payment\",\"Completed\",\"USD\",\"20.00\",\"0.00\",\"20.00\"
+";
+        let t = parse_statement(text).unwrap();
+        // The pending hold and its reversal are skipped entirely.
+        assert_eq!(t.len(), 5);
+        let m = monthly_totals(&t);
+        let aug = m.values().next().unwrap();
+        assert!((aug.money_out - 65.99).abs() < 0.001, "out {}", aug.money_out);
+        assert!((aug.money_in - 20.0).abs() < 0.001, "in {}", aug.money_in);
+        assert!((aug.transfers - 150.0).abs() < 0.001, "transfers {}", aug.transfers);
+    }
+
+    #[test]
+    fn card_payments_are_transfers() {
+        assert!(is_transfer("", "CAPITAL ONE CARD PYMT"));
+        assert!(is_transfer("", "ONLINE TRANSFER TO SAVINGS"));
+        assert!(!is_transfer("", "KING SOOPERS #123"));
     }
 }
