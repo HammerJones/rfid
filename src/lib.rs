@@ -5,6 +5,7 @@ pub mod bank;
 pub mod csvio;
 pub mod model;
 pub mod storage;
+pub mod theme;
 
 pub const APP_NAME: &str = "Budget";
 

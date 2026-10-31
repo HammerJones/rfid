@@ -61,6 +61,8 @@ set CARGO_APK_RELEASE_KEYSTORE_PASSWORD=android
 
 ### Android notes
 
+- If the top bar sits under your phone's status bar or camera, or the bottom tabs sit under the gesture bar, adjust **Settings > Screen spacing**.
+
 - Android has no file picker in this app yet. Files go through the app's folder, `Android/data/com.hammerjones.budget/files/`:
   - Exports are saved there and also copied to the clipboard.
   - To import a budget, put `import.csv` there; for a statement, `statement.csv`.

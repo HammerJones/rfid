@@ -4,10 +4,26 @@ use crate::bank::{self, Recurring, Txn};
 use crate::csvio::{self, money, ImportResult};
 use crate::model::{self, Budget, Expense, Frequency, IncomeMode};
 use crate::storage;
+use crate::theme;
+use std::collections::HashMap;
 use chrono::{Datelike, Duration, Local, NaiveDate};
 use eframe::egui::{self, Color32, RichText};
 
 const SAMPLE_SHEET: &str = include_str!("../tests/sample_sheet.csv");
+
+const TABS: [Tab; 6] = [Tab::Overview, Tab::Expenses, Tab::Calendar, Tab::Bank, Tab::Settings, Tab::ImportExport];
+
+/// (icon, full label, short label for the phone nav bar)
+fn tab_info(t: Tab) -> (&'static str, &'static str, &'static str) {
+    match t {
+        Tab::Overview => ("📊", "Overview", "Home"),
+        Tab::Expenses => ("💳", "Expenses", "Bills"),
+        Tab::Calendar => ("📅", "Schedule", "Calendar"),
+        Tab::Bank => ("🏦", "Bank", "Bank"),
+        Tab::Settings => ("⚙", "Settings", "Settings"),
+        Tab::ImportExport => ("📂", "Import / Export", "Files"),
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -156,12 +172,7 @@ fn sample_budget() -> Budget {
 
 impl BudgetApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // Bigger text and touch targets: easier on phones, still fine on desktop.
-        cc.egui_ctx.style_mut(|s| {
-            s.spacing.item_spacing = egui::vec2(8.0, 6.0);
-            s.spacing.button_padding = egui::vec2(10.0, 5.0);
-            s.spacing.interact_size.y = 26.0;
-        });
+        theme::apply(&cc.egui_ctx);
         let (budget, status) = match storage::load() {
             Some(b) => (b, None),
             None => (
@@ -201,18 +212,30 @@ impl BudgetApp {
     }
 
     fn month_nav(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            if ui.button("< Prev").clicked() {
-                self.view_month = model::add_months(self.view_month, -1);
-            }
-            ui.label(RichText::new(self.view_month.format("%B %Y").to_string()).strong().size(18.0));
-            if ui.button("Next >").clicked() {
-                self.view_month = model::add_months(self.view_month, 1);
-            }
-            if ui.button("This month").clicked() {
-                self.view_month = first_of(today());
-            }
+        theme::card().inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                if ui.add(egui::Button::new(RichText::new("◀").size(16.0)).min_size(egui::vec2(40.0, 34.0))).clicked() {
+                    self.view_month = model::add_months(self.view_month, -1);
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.add(egui::Button::new(RichText::new("▶").size(16.0)).min_size(egui::vec2(40.0, 34.0))).clicked() {
+                        self.view_month = model::add_months(self.view_month, 1);
+                    }
+                    let is_now = self.view_month == first_of(today());
+                    if !is_now && ui.button(RichText::new("Today").color(theme::ACCENT)).clicked() {
+                        self.view_month = first_of(today());
+                    }
+                    ui.with_layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight), |ui| {
+                        ui.label(RichText::new(self.view_month.format("%B %Y").to_string()).size(19.0).strong());
+                    });
+                });
+            });
         });
+        ui.add_space(4.0);
+    }
+
+    fn category_colors(&self) -> HashMap<String, usize> {
+        self.budget.ordered_categories().into_iter().enumerate().map(|(i, c)| (c, i)).collect()
     }
 
     // ---------------------------------------------------------------- Overview
@@ -220,107 +243,116 @@ impl BudgetApp {
         self.month_nav(ui);
         let s = self.budget.summarize(self.view_month);
         let st = self.budget.settings.clone();
-        ui.add_space(4.0);
+        let colors = self.category_colors();
 
-        let color = if s.left_over < -0.004 { Color32::from_rgb(220, 70, 70) } else { Color32::from_rgb(60, 170, 90) };
+        let left_color = if s.left_over < -0.004 { theme::BAD } else { theme::GOOD };
         let cards = [
-            ("Income (after tax)".to_string(), money(s.income), None),
-            (format!("Savings ({:.0}%)", st.savings_rate * 100.0), money(s.savings), None),
-            ("Expenses".to_string(), money(s.total_expenses), None),
-            ("Left over".to_string(), money(s.left_over), Some(color)),
+            ("💵", "Income".to_string(), money(s.income), theme::SKY),
+            ("💰", format!("Savings {:.0}%", st.savings_rate * 100.0), money(s.savings), theme::VIOLET),
+            ("💳", "Expenses".to_string(), money(s.total_expenses), theme::AMBER),
+            ("🎯", "Left over".to_string(), money(s.left_over), left_color),
         ];
         // Four across on wide screens, two by two on phones.
         let per_row = if ui.available_width() > 620.0 { 4 } else { 2 };
         for chunk in cards.chunks(per_row) {
             ui.columns(per_row, |cols| {
-                for (col, (title, value, color)) in cols.iter_mut().zip(chunk) {
-                    stat_card(col, title, value, *color);
+                for (col, (icon, title, value, color)) in cols.iter_mut().zip(chunk) {
+                    stat_card(col, icon, title, value, *color);
+                }
+            });
+        }
+        ui.add_space(4.0);
+
+        // Highlight: the left-over line (e.g. max rent).
+        if let Some(rem) = s.categories.iter().flat_map(|c| &c.items).find(|i| i.is_remainder) {
+            let over = rem.monthly_cost < 0.0;
+            let color = if over { theme::BAD } else { theme::ACCENT };
+            theme::tinted_card(color).show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                if over {
+                    ui.label(RichText::new(format!("⚠  Over budget by {}", money(-rem.monthly_cost))).strong().color(theme::BAD));
+                    ui.label(theme::muted(format!("Your other expenses and savings already use all your income, so there's nothing left for {}.", rem.name)));
+                } else {
+                    ui.label(theme::muted(format!("Max {} you can afford", rem.name.to_lowercase())));
+                    ui.label(RichText::new(money(rem.monthly_cost)).size(26.0).strong().color(color));
                 }
             });
         }
 
-        // Savings goal progress.
+        // Savings goal.
         let goal = st.savings_goal.max(0.01);
         let frac = (st.current_savings / goal).clamp(0.0, 1.0) as f32;
-        let months = match s.months_to_goal {
-            Some(0) => "Goal reached".to_string(),
-            Some(m) => format!("{m} months to go at {}/mo", money(s.savings)),
-            None => "Set a savings rate to reach this".to_string(),
-        };
-        ui.add_space(4.0);
-        ui.label(format!(
-            "Emergency fund: {} of {} ({})",
-            money(st.current_savings),
-            money(st.savings_goal),
-            months
-        ));
-        ui.add(egui::ProgressBar::new(frac).desired_height(10.0));
-
-        if let Some(rem) = s.categories.iter().flat_map(|c| &c.items).find(|i| i.is_remainder) {
-            let msg = if rem.monthly_cost < 0.0 {
-                format!("Over budget: \"{}\" would need to be {} to balance.", rem.name, money(rem.monthly_cost))
-            } else {
-                format!("Max \"{}\" you can afford this month: {}", rem.name, money(rem.monthly_cost))
+        theme::card().show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("💰  Emergency fund").strong());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(theme::muted(format!("{} / {}", money(st.current_savings), money(st.savings_goal))));
+                });
+            });
+            theme::bar(ui, frac, theme::VIOLET, 10.0);
+            let months = match s.months_to_goal {
+                Some(0) => "Goal reached!".to_string(),
+                Some(m) => format!("{m} months to go at {}/month", money(s.savings)),
+                None => "Set a savings rate in Settings to reach this goal".to_string(),
             };
-            ui.label(RichText::new(msg).strong());
-        }
-        ui.separator();
+            ui.label(theme::muted(months).small());
+        });
 
+        ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Export monthly summary (CSV)").clicked() {
-                self.export_summary(ui.ctx());
-            }
-            if ui.button("+ Add expense").clicked() {
+            if theme::primary_button(ui, "➕  Add expense").clicked() {
                 let cat = self.budget.ordered_categories().first().cloned().unwrap_or_default();
                 self.editor = Some(Editor::new(&cat, self.view_month));
+            }
+            if ui.button("📤  Export summary").clicked() {
+                self.export_summary(ui.ctx());
             }
         });
         ui.add_space(4.0);
 
         let mut edit: Option<u64> = None;
         for cat in &s.categories {
+            let color = theme::category_color(colors.get(&cat.name).copied().unwrap_or(0));
             let share = if s.income > 0.0 { (cat.total() / s.income).clamp(0.0, 1.0) as f32 } else { 0.0 };
-            egui::CollapsingHeader::new(RichText::new(format!("{}  ({})", cat.name, money(cat.total()))).strong())
-                .id_salt(("cat", &cat.name))
-                .default_open(true)
-                .show(ui, |ui| {
-                    ui.add(egui::ProgressBar::new(share).text(format!("{:.0}% of income", share * 100.0)));
-                    let narrow = ui.available_width() < 480.0;
-                    egui::Grid::new(("grid", &cat.name)).striped(true).show(ui, |ui| {
-                        ui.label(RichText::new("Item").weak());
-                        ui.label(RichText::new("This month").weak());
-                        ui.label(RichText::new("Due").weak());
-                        if narrow {
-                            ui.label(RichText::new("Left").weak());
-                        } else {
-                            ui.label(RichText::new("Balance left").weak());
-                            ui.label(RichText::new("Payments left").weak());
-                        }
-                        ui.end_row();
-                        for it in &cat.items {
-                            let name = if it.is_remainder { format!("{} (left-over)", it.name) } else { it.name.clone() };
-                            if ui.link(name).on_hover_text("Edit").clicked() {
-                                edit = Some(it.expense_id);
-                            }
-                            ui.label(money(it.monthly_cost));
-                            let due = it.due_dates.iter().map(|d| ordinal(d.day())).collect::<Vec<_>>().join(", ");
-                            ui.label(if due.is_empty() { "-".into() } else { due });
-                            let bal = it.remaining_balance.map(money);
-                            let pay = it.remaining_payments.map(|p| format!("{p} pmts"));
-                            if narrow {
-                                let both = [bal, pay].into_iter().flatten().collect::<Vec<_>>().join(", ");
-                                ui.label(if both.is_empty() { "-".into() } else { both });
-                            } else {
-                                ui.label(it.remaining_balance.map(money).unwrap_or_else(|| "n/a".into()));
-                                ui.label(it.remaining_payments.map(|p| p.to_string()).unwrap_or_else(|| "n/a".into()));
-                            }
-                            ui.end_row();
-                        }
+            theme::card().show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(theme::category_icon(&cat.name)).size(20.0).color(color));
+                    ui.label(RichText::new(&cat.name).size(17.0).strong());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(RichText::new(money(cat.total())).size(17.0).strong().color(color));
                     });
                 });
+                theme::bar(ui, share, color, 6.0);
+                ui.label(theme::muted(format!("{:.0}% of income", share * 100.0)).small());
+                ui.add_space(2.0);
+                for it in &cat.items {
+                    let due = it.due_dates.iter().map(|d| ordinal(d.day())).collect::<Vec<_>>().join(", ");
+                    let mut sub = Vec::new();
+                    if it.is_remainder {
+                        sub.push("left-over".to_string());
+                    }
+                    if !due.is_empty() {
+                        sub.push(format!("due {due}"));
+                    }
+                    if let Some(b) = it.remaining_balance {
+                        sub.push(format!("{} left", money(b)));
+                    }
+                    if let Some(p) = it.remaining_payments {
+                        sub.push(format!("{p} payments left"));
+                    }
+                    if item_row(ui, color, &it.name, &sub.join("  ·  "), &money(it.monthly_cost), theme::TEXT).clicked() {
+                        edit = Some(it.expense_id);
+                    }
+                }
+            });
         }
         if s.categories.is_empty() {
-            ui.label("No expenses are due this month. Add one, or import a CSV.");
+            theme::card().show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.label(theme::muted("No expenses are due this month. Add one, or import a CSV."));
+            });
         }
         if let Some(id) = edit {
             self.open_editor(id);
@@ -329,17 +361,21 @@ impl BudgetApp {
 
     // ---------------------------------------------------------------- Expenses
     fn expenses(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("+ Add expense").clicked() {
+        ui.horizontal(|ui| {
+            if theme::primary_button(ui, "➕  Add").clicked() {
                 let cat = self.budget.ordered_categories().first().cloned().unwrap_or_default();
                 self.editor = Some(Editor::new(&cat, first_of(today())));
             }
-            ui.label("Search:");
-            ui.add(egui::TextEdit::singleline(&mut self.filter).desired_width(160.0));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.filter)
+                    .hint_text("🔍 Search expenses")
+                    .desired_width(f32::INFINITY),
+            );
         });
-        ui.separator();
+        ui.add_space(4.0);
         let t = today();
         let filter = self.filter.to_lowercase();
+        let colors = self.category_colors();
         let mut edit = None;
         let mut delete = None;
         for cat in self.budget.ordered_categories() {
@@ -353,32 +389,37 @@ impl BudgetApp {
             if items.is_empty() {
                 continue;
             }
-            ui.label(RichText::new(&cat).strong().size(16.0));
-            egui::Grid::new(("exp", &cat)).striped(true).num_columns(5).show(ui, |ui| {
+            let color = theme::category_color(colors.get(&cat).copied().unwrap_or(0));
+            theme::card().show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(theme::category_icon(&cat)).size(20.0).color(color));
+                    ui.label(RichText::new(&cat).size(17.0).strong());
+                    ui.label(theme::muted(format!("{}", items.len())));
+                });
                 for e in items {
-                    ui.label(&e.name);
-                    ui.label(if e.is_remainder { "left-over".to_string() } else { money(e.amount) });
-                    ui.label(e.frequency.label());
                     let next = e.due_dates_between(t, t + Duration::days(800)).first().copied();
-                    ui.label(match next {
+                    let when = match next {
                         Some(d) => format!("next {}", d.format("%b %-d")),
                         None => "finished".into(),
-                    });
-                    ui.horizontal(|ui| {
-                        if ui.small_button("Edit").clicked() {
-                            edit = Some(e.id);
-                        }
-                        if ui.small_button("Delete").clicked() {
-                            delete = Some(e.id);
-                        }
-                    });
-                    ui.end_row();
+                    };
+                    let amount = if e.is_remainder { "left-over".to_string() } else { money(e.amount) };
+                    let sub = format!("{}  ·  {}", e.frequency.label(), when);
+                    let (row, action) = expense_row(ui, color, &e.name, &sub, &amount);
+                    match action {
+                        Some(RowAction::Edit) => edit = Some(e.id),
+                        Some(RowAction::Delete) => delete = Some(e.id),
+                        None if row.clicked() => edit = Some(e.id),
+                        None => {}
+                    }
                 }
             });
-            ui.add_space(6.0);
         }
         if self.budget.expenses.is_empty() {
-            ui.label("No expenses yet.");
+            theme::card().show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.label(theme::muted("No expenses yet. Tap Add, or import a CSV."));
+            });
         }
         if let Some(id) = edit {
             self.open_editor(id);
@@ -395,16 +436,28 @@ impl BudgetApp {
         let end = model::month_end(start);
         let due = self.budget.schedule(start, end);
         let s = self.budget.summarize(start);
+        let colors = self.category_colors();
         let rem_cost: f64 = s.categories.iter().flat_map(|c| &c.items).filter(|i| i.is_remainder).map(|i| i.monthly_cost).sum();
-
+        let color_of = |e: &Expense| theme::category_color(colors.get(&e.category).copied().unwrap_or(0));
         let amount_of = |e: &Expense| if e.is_remainder { rem_cost } else { e.amount };
-        let cell_w = ((ui.available_width() - 6.0 * 4.0) / 7.0).max(40.0);
-        let compact = cell_w < 90.0;
-        let cell_h = if compact { 56.0 } else { 86.0 };
 
-        egui::Grid::new("cal").spacing(egui::vec2(4.0, 4.0)).show(ui, |ui| {
-            for w in ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] {
-                ui.allocate_ui(egui::vec2(cell_w, 18.0), |ui| ui.label(RichText::new(w).weak()));
+        let gap = 4.0;
+        let cell_w = ((ui.available_width() - 6.0 * gap - 14.0) / 7.0).floor().max(36.0);
+        let compact = cell_w < 90.0;
+        let cell_h = if compact { 58.0 } else { 90.0 };
+
+        let month_total: f64 = due.iter().map(|(_, e)| amount_of(e)).sum();
+        ui.columns(2, |cols| {
+            stat_card(&mut cols[0], "📅", "Payments due", &due.len().to_string(), theme::SKY);
+            stat_card(&mut cols[1], "💳", "Total this month", &money(month_total), theme::AMBER);
+        });
+        ui.add_space(4.0);
+
+        egui::Grid::new("cal").spacing(egui::vec2(gap, gap)).show(ui, |ui| {
+            for w in ["S", "M", "T", "W", "T", "F", "S"] {
+                ui.allocate_ui(egui::vec2(cell_w, 18.0), |ui| {
+                    ui.vertical_centered(|ui| ui.label(theme::muted(w).small().strong()));
+                });
             }
             ui.end_row();
             let lead = start.weekday().num_days_from_sunday();
@@ -417,30 +470,44 @@ impl BudgetApp {
                 let todays: Vec<&(NaiveDate, &Expense)> = due.iter().filter(|(d, _)| *d == day).collect();
                 let selected = self.selected_day == Some(day);
                 let is_today = day == today();
-                let mut frame = egui::Frame::group(ui.style()).inner_margin(4.0);
+                let busy = !todays.is_empty();
+                let mut frame = egui::Frame::new()
+                    .fill(if busy { theme::mix(theme::CARD, theme::AMBER, 0.10) } else { theme::CARD })
+                    .corner_radius(egui::CornerRadius::same(10))
+                    .inner_margin(egui::Margin::same(5))
+                    .stroke(egui::Stroke::new(1.0_f32, theme::BORDER));
                 if selected {
-                    frame = frame.stroke(egui::Stroke::new(2.0_f32, ui.visuals().selection.bg_fill));
+                    frame = frame.stroke(egui::Stroke::new(2.0_f32, theme::VIOLET));
                 } else if is_today {
-                    frame = frame.stroke(egui::Stroke::new(1.5_f32, Color32::from_rgb(60, 170, 90)));
+                    frame = frame.stroke(egui::Stroke::new(2.0_f32, theme::ACCENT));
                 }
                 let resp = frame
                     .show(ui, |ui| {
                         ui.set_min_size(egui::vec2(cell_w - 10.0, cell_h - 10.0));
                         ui.set_max_width(cell_w - 10.0);
                         ui.vertical(|ui| {
-                            ui.label(RichText::new(day.day().to_string()).strong());
-                            if compact {
-                                if !todays.is_empty() {
+                            let num = RichText::new(day.day().to_string()).strong();
+                            ui.label(if is_today { num.color(theme::ACCENT) } else { num });
+                            if busy {
+                                if compact {
+                                    // One colored dot per payment (up to 4), then the day's total.
+                                    let (rect, _) = ui.allocate_exact_size(egui::vec2(cell_w - 10.0, 8.0), egui::Sense::hover());
+                                    for (i, (_, e)) in todays.iter().take(4).enumerate() {
+                                        let c = rect.left_center() + egui::vec2(4.0 + i as f32 * 9.0, 0.0);
+                                        ui.painter().circle_filled(c, 3.5, color_of(e));
+                                    }
                                     let total: f64 = todays.iter().map(|(_, e)| amount_of(e)).sum();
-                                    ui.label(RichText::new(format!("{} due", todays.len())).small());
-                                    ui.label(RichText::new(money(total)).small());
-                                }
-                            } else {
-                                for (_, e) in todays.iter().take(3) {
-                                    ui.add(egui::Label::new(RichText::new(format!("{} {}", e.name, money(amount_of(e)))).small()).truncate());
-                                }
-                                if todays.len() > 3 {
-                                    ui.label(RichText::new(format!("+{} more", todays.len() - 3)).small().weak());
+                                    ui.add(egui::Label::new(RichText::new(short_money(total)).size(11.0).color(theme::AMBER)).truncate());
+                                } else {
+                                    for (_, e) in todays.iter().take(3) {
+                                        ui.add(
+                                            egui::Label::new(RichText::new(format!("● {}", e.name)).size(11.0).color(color_of(e)))
+                                                .truncate(),
+                                        );
+                                    }
+                                    if todays.len() > 3 {
+                                        ui.label(theme::muted(format!("+{} more", todays.len() - 3)).size(11.0));
+                                    }
                                 }
                             }
                         });
@@ -457,62 +524,57 @@ impl BudgetApp {
                 day = day.succ_opt().expect("next day");
             }
         });
+        ui.add_space(6.0);
 
-        ui.separator();
-        let month_total: f64 = due.iter().map(|(_, e)| amount_of(e)).sum();
-        ui.label(format!("{} payments due this month, {} total.", due.len(), money(month_total)));
-
+        let mut edit = None;
         if let Some(sel) = self.selected_day {
-            ui.label(RichText::new(sel.format("%A, %B %-d").to_string()).strong());
-            let list: Vec<(String, f64, u64)> = self
+            let list: Vec<(String, String, f64, u64, egui::Color32)> = self
                 .budget
                 .schedule(sel, sel)
                 .into_iter()
-                .map(|(_, e)| (e.name.clone(), amount_of(e), e.id))
+                .map(|(_, e)| (e.name.clone(), e.category.clone(), amount_of(e), e.id, color_of(e)))
                 .collect();
-            if list.is_empty() {
-                ui.label("Nothing due.");
-            }
-            let mut edit = None;
-            for (name, amt, id) in list {
-                ui.horizontal(|ui| {
-                    if ui.link(&name).clicked() {
-                        edit = Some(id);
+            theme::card().show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.label(RichText::new(sel.format("%A, %B %-d").to_string()).size(17.0).strong());
+                if list.is_empty() {
+                    ui.label(theme::muted("Nothing due. ✔"));
+                }
+                for (name, cat, amt, id, color) in &list {
+                    if item_row(ui, *color, name, cat, &money(*amt), theme::AMBER).clicked() {
+                        edit = Some(*id);
                     }
-                    ui.label(money(amt));
-                });
-            }
-            if let Some(id) = edit {
-                self.open_editor(id);
-            }
+                }
+            });
         }
 
-        ui.separator();
-        ui.label(RichText::new("Next 30 days").strong());
         let t = today();
-        let upcoming: Vec<(NaiveDate, String, f64)> = self
+        let upcoming: Vec<(NaiveDate, String, f64, u64, egui::Color32)> = self
             .budget
             .schedule(t, t + Duration::days(30))
             .into_iter()
-            .map(|(d, e)| (d, e.name.clone(), amount_of(e)))
+            .map(|(d, e)| (d, e.name.clone(), amount_of(e), e.id, color_of(e)))
             .collect();
-        egui::Grid::new("upcoming").striped(true).show(ui, |ui| {
-            for (d, name, amt) in &upcoming {
-                ui.label(d.format("%a %b %-d").to_string());
-                ui.label(name);
-                ui.label(money(*amt));
-                ui.end_row();
+        theme::card().show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(RichText::new("⏵  Next 30 days").size(17.0).strong());
+            if upcoming.is_empty() {
+                ui.label(theme::muted("Nothing due in the next 30 days."));
+            }
+            for (d, name, amt, id, color) in &upcoming {
+                if item_row(ui, *color, name, &d.format("%a, %b %-d").to_string(), &money(*amt), theme::TEXT).clicked() {
+                    edit = Some(*id);
+                }
             }
         });
-        if upcoming.is_empty() {
-            ui.label("Nothing due in the next 30 days.");
+        if let Some(id) = edit {
+            self.open_editor(id);
         }
     }
 
-
     // ---------------------------------------------------------------- Bank statements
     fn bank_tab(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("Bank & card statements").strong().size(16.0));
+        theme::section_title(ui, "🏦", "Bank & card statements");
         ui.label(
             "Import CSV statements from your bank or card (download them from the bank's website). \
              The app finds payments that repeat on a schedule and shows where your money goes. \
@@ -572,7 +634,7 @@ impl BudgetApp {
         ui.separator();
 
         // Recurring payments.
-        ui.label(RichText::new("Recurring payments found").strong().size(16.0));
+        theme::section_title(ui, "🔁", "Recurring payments found");
         if self.bank_found.is_empty() {
             ui.label("None found yet. Recurring payments need at least 2 charges (3 for weekly), so add more months.");
         } else {
@@ -644,7 +706,7 @@ impl BudgetApp {
         ui.separator();
 
         // Monthly totals.
-        ui.label(RichText::new("Money in and out by month").strong().size(16.0));
+        theme::section_title(ui, "📈", "Money in and out by month");
         let months = bank::monthly_totals(&self.bank_txns);
         egui::Grid::new("bank_months").striped(true).show(ui, |ui| {
             ui.label(RichText::new("Month").weak());
@@ -669,14 +731,24 @@ impl BudgetApp {
         ui.separator();
 
         // Spending breakdowns.
-        ui.label(RichText::new("Spending by category (best guess)").strong().size(16.0));
+        theme::section_title(ui, "📊", "Spending by category (best guess)");
         let cats = bank::by_category(&self.bank_txns);
         let total: f64 = cats.iter().map(|c| c.1).sum::<f64>().max(0.01);
         for (name, amt) in &cats {
-            ui.add(egui::ProgressBar::new((amt / total) as f32).text(format!("{name}: {} ({:.0}%)", money(*amt), amt / total * 100.0)));
+            let idx = self.budget.ordered_categories().iter().position(|c| c == name).unwrap_or(7);
+            let color = if name == "Uncategorized" { theme::MUTED } else { theme::category_color(idx) };
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(theme::category_icon(name)).color(color));
+                ui.label(name.as_str());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(theme::muted(format!("{:.0}%", amt / total * 100.0)));
+                    ui.label(RichText::new(money(*amt)).strong().color(color));
+                });
+            });
+            theme::bar(ui, (amt / total) as f32, color, 6.0);
         }
         ui.add_space(6.0);
-        ui.label(RichText::new("Top merchants").strong().size(16.0));
+        theme::section_title(ui, "🏷", "Top merchants");
         egui::Grid::new("merchants").striped(true).show(ui, |ui| {
             for (name, amt, n) in bank::by_merchant(&self.bank_txns).into_iter().take(15) {
                 ui.label(name);
@@ -719,7 +791,7 @@ impl BudgetApp {
     fn settings(&mut self, ui: &mut egui::Ui) {
         let before = self.budget.settings.clone();
         let st = &mut self.budget.settings;
-        ui.label(RichText::new("Income").strong().size(16.0));
+        theme::section_title(ui, "💵", "Income");
         ui.horizontal(|ui| {
             ui.radio_value(&mut st.income_mode, IncomeMode::Hourly, "Hourly pay");
             ui.radio_value(&mut st.income_mode, IncomeMode::Fixed, "Fixed monthly amount");
@@ -754,7 +826,7 @@ impl BudgetApp {
         ui.label(format!("Monthly income after tax: {}", money(st.monthly_income())));
 
         ui.add_space(8.0);
-        ui.label(RichText::new("Savings").strong().size(16.0));
+        theme::section_title(ui, "💰", "Savings");
         egui::Grid::new("savings").num_columns(2).show(ui, |ui| {
             ui.label("Save this share of income");
             let mut pct = st.savings_rate * 100.0;
@@ -771,14 +843,14 @@ impl BudgetApp {
         });
 
         ui.add_space(8.0);
-        ui.label(RichText::new("Note at the top of the exported summary").strong());
+        theme::section_title(ui, "✏", "Note at the top of the exported summary");
         ui.add(egui::TextEdit::multiline(&mut st.note).desired_rows(3).desired_width(f32::INFINITY));
         if self.budget.settings != before {
             self.dirty = true;
         }
 
         ui.add_space(8.0);
-        ui.label(RichText::new("Categories").strong().size(16.0));
+        theme::section_title(ui, "🏷", "Categories");
         ui.label(RichText::new("Order here is the order used in the summary and export.").weak());
         let cats = self.budget.ordered_categories();
         if self.budget.categories != cats {
@@ -800,16 +872,16 @@ impl BudgetApp {
                 ui.label(c);
                 let count = self.budget.expenses.iter().filter(|e| &e.category == c).count();
                 ui.label(RichText::new(format!("({count})")).weak());
-                if ui.small_button("Up").clicked() && i > 0 {
+                if ui.small_button("⏶").on_hover_text("Move up").clicked() && i > 0 {
                     action = Some(("up", i));
                 }
-                if ui.small_button("Down").clicked() && i + 1 < cats.len() {
+                if ui.small_button("⏷").on_hover_text("Move down").clicked() && i + 1 < cats.len() {
                     action = Some(("down", i));
                 }
-                if ui.small_button("Rename").clicked() {
+                if ui.small_button(RichText::new("✏").color(theme::ACCENT)).on_hover_text("Rename").clicked() {
                     self.renaming = Some((i, c.clone()));
                 }
-                if ui.small_button("Delete").clicked() {
+                if ui.small_button(RichText::new("🗑").color(theme::BAD)).on_hover_text("Delete").clicked() {
                     action = Some(("delete", i));
                 }
             });
@@ -862,6 +934,21 @@ impl BudgetApp {
 
         ui.add_space(8.0);
         ui.separator();
+        theme::section_title(ui, "📱", "Screen spacing");
+        ui.label(theme::muted("If the top bar is hidden behind your phone's status bar or camera, raise the top space. Raise the bottom space if the gesture bar covers the tabs."));
+        egui::Grid::new("safe").num_columns(2).show(ui, |ui| {
+            ui.label("Top space");
+            if ui.add(egui::Slider::new(&mut self.budget.settings.safe_top, 0.0..=110.0).suffix(" pt")).changed() {
+                self.dirty = true;
+            }
+            ui.end_row();
+            ui.label("Bottom space");
+            if ui.add(egui::Slider::new(&mut self.budget.settings.safe_bottom, 0.0..=110.0).suffix(" pt")).changed() {
+                self.dirty = true;
+            }
+            ui.end_row();
+        });
+        ui.add_space(8.0);
         ui.label(RichText::new(format!("Your data is saved automatically to {}", storage::budget_path().display())).weak());
         if ui.button("Reset to sample data").clicked() {
             self.budget = sample_budget();
@@ -872,7 +959,7 @@ impl BudgetApp {
 
     // ---------------------------------------------------------------- Import / Export
     fn import_export(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("Import").strong().size(16.0));
+        theme::section_title(ui, "📥", "Import");
         ui.label(
             "Accepts your monthly summary spreadsheet (exported as CSV), or a list with columns like \
              name, category, amount, frequency, start date, remaining balance, remaining payments.",
@@ -950,7 +1037,7 @@ impl BudgetApp {
 
         ui.add_space(10.0);
         ui.separator();
-        ui.label(RichText::new("Export").strong().size(16.0));
+        theme::section_title(ui, "📤", "Export");
         self.month_nav(ui);
         ui.horizontal_wrapped(|ui| {
             if ui.button("Monthly summary (CSV)").clicked() {
@@ -1131,7 +1218,7 @@ impl BudgetApp {
                     ui.colored_label(Color32::from_rgb(220, 70, 70), err);
                 }
                 ui.horizontal(|ui| {
-                    if ui.button("Save").clicked() {
+                    if theme::primary_button(ui, "✔  Save").clicked() {
                         save = true;
                     }
                     if ui.button("Cancel").clicked() {
@@ -1198,18 +1285,86 @@ impl BudgetApp {
     }
 }
 
-fn stat_card(ui: &mut egui::Ui, title: &str, value: &str, color: Option<Color32>) {
-    egui::Frame::group(ui.style()).inner_margin(8.0).show(ui, |ui| {
+fn stat_card(ui: &mut egui::Ui, icon: &str, title: &str, value: &str, color: Color32) {
+    theme::tinted_card(color).show(ui, |ui| {
         ui.set_min_width(ui.available_width());
         ui.vertical(|ui| {
-            ui.label(RichText::new(title).weak());
-            let mut t = RichText::new(value).size(20.0).strong();
-            if let Some(c) = color {
-                t = t.color(c);
-            }
-            ui.label(t);
+            ui.label(RichText::new(format!("{icon}  {title}")).size(13.0).color(theme::mix(theme::MUTED, color, 0.35)));
+            ui.add(egui::Label::new(RichText::new(value).size(21.0).strong().color(color)).truncate());
         });
     });
+}
+
+/// "$1.2k" style for tiny calendar cells.
+fn short_money(v: f64) -> String {
+    if v.abs() >= 1000.0 {
+        format!("${:.1}k", v / 1000.0)
+    } else {
+        format!("${:.0}", v)
+    }
+}
+
+/// A tappable list row: colored dot, title with a muted subtitle, amount on the right.
+fn item_row(ui: &mut egui::Ui, color: Color32, title: &str, subtitle: &str, amount: &str, amount_color: Color32) -> egui::Response {
+    let resp = egui::Frame::new()
+        .inner_margin(egui::Margin::symmetric(4, 6))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                ui.painter().circle_filled(rect.center(), 4.5, color);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(RichText::new(amount).strong().color(amount_color));
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                        ui.add(egui::Label::new(RichText::new(title).color(theme::TEXT)).truncate());
+                        if !subtitle.is_empty() {
+                            ui.add(egui::Label::new(theme::muted(subtitle).size(12.0)).truncate());
+                        }
+                    });
+                });
+            });
+        })
+        .response
+        .interact(egui::Sense::click());
+    if resp.hovered() {
+        ui.painter().rect_stroke(resp.rect, egui::CornerRadius::same(8), egui::Stroke::new(1.0_f32, theme::BORDER), egui::StrokeKind::Inside);
+    }
+    resp
+}
+
+enum RowAction {
+    Edit,
+    Delete,
+}
+
+/// Like `item_row`, with edit and delete buttons.
+fn expense_row(ui: &mut egui::Ui, color: Color32, title: &str, subtitle: &str, amount: &str) -> (egui::Response, Option<RowAction>) {
+    let mut action = None;
+    let resp = egui::Frame::new()
+        .inner_margin(egui::Margin::symmetric(4, 6))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                ui.painter().circle_filled(rect.center(), 4.5, color);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.add(egui::Button::new(RichText::new("🗑").color(theme::BAD)).frame(false)).on_hover_text("Delete").clicked() {
+                        action = Some(RowAction::Delete);
+                    }
+                    if ui.add(egui::Button::new(RichText::new("✏").color(theme::ACCENT)).frame(false)).on_hover_text("Edit").clicked() {
+                        action = Some(RowAction::Edit);
+                    }
+                    ui.label(RichText::new(amount).strong());
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                        ui.add(egui::Label::new(RichText::new(title).color(theme::TEXT)).truncate());
+                        ui.add(egui::Label::new(theme::muted(subtitle).size(12.0)).truncate());
+                    });
+                });
+            });
+        })
+        .response
+        .interact(egui::Sense::click());
+    (resp, action)
 }
 
 /// Does a found payment look like an expense that's already in the budget?
@@ -1246,37 +1401,127 @@ fn ordinal(n: u32) -> String {
 
 impl eframe::App for BudgetApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
-            ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("Budget").strong().size(20.0));
-                ui.add_space(8.0);
-                ui.selectable_value(&mut self.tab, Tab::Overview, "Overview");
-                ui.selectable_value(&mut self.tab, Tab::Expenses, "Expenses");
-                ui.selectable_value(&mut self.tab, Tab::Calendar, "Schedule");
-                ui.selectable_value(&mut self.tab, Tab::Bank, "Bank");
-                ui.selectable_value(&mut self.tab, Tab::Settings, "Settings");
-                ui.selectable_value(&mut self.tab, Tab::ImportExport, "Import / Export");
-            });
-            ui.add_space(4.0);
-        });
+        let narrow = ctx.screen_rect().width() < 720.0;
+        let top_pad = self.budget.settings.safe_top.clamp(0.0, 110.0);
+        let bottom_pad = self.budget.settings.safe_bottom.clamp(0.0, 110.0);
 
-        if self.status.is_some() {
-            egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
+        // Header. On phones it sits below the status bar and camera cutout.
+        egui::TopBottomPanel::top("header")
+            .show_separator_line(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::PANEL)
+                    .inner_margin(egui::Margin { left: 16, right: 16, top: (top_pad + 10.0) as i8, bottom: 10 }),
+            )
+            .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    match &self.status {
-                        Some(Status::Info(s)) => ui.label(s),
-                        Some(Status::Error(s)) => ui.colored_label(Color32::from_rgb(220, 70, 70), s),
-                        None => ui.label(""),
-                    };
-                    if ui.small_button("x").clicked() {
-                        self.status = None;
+                    ui.label(RichText::new("💰").size(24.0).color(theme::ACCENT));
+                    ui.label(RichText::new("Budget").size(22.0).strong().color(theme::TEXT));
+                    if narrow {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let (icon, label, _) = tab_info(self.tab);
+                            ui.label(theme::muted(format!("{icon} {label}")).size(15.0));
+                        });
+                    } else {
+                        ui.add_space(16.0);
+                        for t in TABS {
+                            let (icon, label, _) = tab_info(t);
+                            let selected = self.tab == t;
+                            let text = RichText::new(format!("{icon}  {label}")).color(if selected { theme::ACCENT } else { theme::MUTED });
+                            if ui.add(egui::Button::new(text).selected(selected).frame(selected)).clicked() {
+                                self.tab = t;
+                            }
+                        }
                     }
                 });
             });
+
+        // Phones: a bottom navigation bar with icons.
+        if narrow {
+            egui::TopBottomPanel::bottom("nav")
+                .show_separator_line(false)
+                .frame(
+                    egui::Frame::new()
+                        .fill(theme::PANEL)
+                        .stroke(egui::Stroke::new(1.0_f32, theme::BORDER))
+                        .inner_margin(egui::Margin { left: 4, right: 4, top: 6, bottom: (bottom_pad + 6.0) as i8 }),
+                )
+                .show(ctx, |ui| {
+                    ui.columns(TABS.len(), |cols| {
+                        for (col, t) in cols.iter_mut().zip(TABS) {
+                            let (icon, _, short) = tab_info(t);
+                            let selected = self.tab == t;
+                            let color = if selected { theme::ACCENT } else { theme::MUTED };
+                            // Paint the icon and label ourselves so the whole cell is one tap target.
+                            let (rect, resp) = col.allocate_exact_size(egui::vec2(col.available_width(), 46.0), egui::Sense::click());
+                            let painter = col.painter_at(rect.expand(6.0));
+                            painter.text(
+                                egui::pos2(rect.center().x, rect.top() + 15.0),
+                                egui::Align2::CENTER_CENTER,
+                                icon,
+                                egui::FontId::proportional(22.0),
+                                color,
+                            );
+                            painter.text(
+                                egui::pos2(rect.center().x, rect.bottom() - 7.0),
+                                egui::Align2::CENTER_CENTER,
+                                short,
+                                egui::FontId::proportional(11.0),
+                                color,
+                            );
+                            if selected {
+                                let r = resp.rect;
+                                let bar = egui::Rect::from_center_size(egui::pos2(r.center().x, r.top() - 4.0), egui::vec2(24.0, 3.0));
+                                col.painter().rect_filled(bar, egui::CornerRadius::same(2), theme::ACCENT);
+                            }
+                            if resp.clicked() {
+                                self.tab = t;
+                            }
+                        }
+                    });
+                });
         }
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        // Messages ("Saved", errors) as a small colored banner above the nav bar.
+        if self.status.is_some() {
+            let pad = if narrow { 0.0 } else { bottom_pad };
+            egui::TopBottomPanel::bottom("status")
+                .show_separator_line(false)
+                .frame(egui::Frame::new().fill(theme::BG).inner_margin(egui::Margin {
+                    left: 10,
+                    right: 10,
+                    top: 6,
+                    bottom: (pad + 6.0) as i8,
+                }))
+                .show(ctx, |ui| {
+                    let (icon, text, color) = match &self.status {
+                        Some(Status::Info(s)) => ("✔", s.clone(), theme::ACCENT),
+                        Some(Status::Error(s)) => ("⚠", s.clone(), theme::BAD),
+                        None => ("", String::new(), theme::MUTED),
+                    };
+                    let mut close = false;
+                    theme::tinted_card(color).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        ui.horizontal_top(|ui| {
+                            ui.label(RichText::new(icon).color(color));
+                            let w = (ui.available_width() - 30.0).max(50.0);
+                            ui.allocate_ui(egui::vec2(w, 0.0), |ui| {
+                                ui.add(egui::Label::new(RichText::new(text).color(theme::TEXT)).wrap());
+                            });
+                            if ui.add(egui::Button::new(theme::muted("✖")).frame(false)).clicked() {
+                                close = true;
+                            }
+                        });
+                    });
+                    if close {
+                        self.status = None;
+                    }
+                });
+        }
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(theme::BG).inner_margin(egui::Margin::symmetric(12, 8)))
+            .show(ctx, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.tab {
                 Tab::Overview => self.overview(ui),
                 Tab::Expenses => self.expenses(ui),

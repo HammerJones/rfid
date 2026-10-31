@@ -162,6 +162,20 @@ pub struct Settings {
     pub current_savings: f64,
     /// Free-text note shown at the top of the exported summary.
     pub note: String,
+    /// Extra space at the top of the screen for the phone's status bar and camera cutout.
+    #[serde(default = "default_safe_top")]
+    pub safe_top: f32,
+    /// Extra space at the bottom for the phone's gesture/navigation bar.
+    #[serde(default = "default_safe_bottom")]
+    pub safe_bottom: f32,
+}
+
+fn default_safe_top() -> f32 {
+    if cfg!(target_os = "android") { 48.0 } else { 0.0 }
+}
+
+fn default_safe_bottom() -> f32 {
+    if cfg!(target_os = "android") { 24.0 } else { 0.0 }
 }
 
 impl Default for Settings {
@@ -177,6 +191,8 @@ impl Default for Settings {
             savings_goal: 5000.0,
             current_savings: 0.0,
             note: "Sample budget with made-up numbers. Import your own spreadsheet from Import / Export to replace it.".into(),
+            safe_top: default_safe_top(),
+            safe_bottom: default_safe_bottom(),
         }
     }
 }
