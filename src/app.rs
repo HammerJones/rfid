@@ -147,6 +147,9 @@ pub struct BudgetApp {
     bank_found: Vec<(Recurring, bool)>,
     bank_files: Vec<String>,
     picker: Option<Picker>,
+    /// Cached result of the Android "All files access" check, and when it was taken.
+    #[allow(dead_code)]
+    file_access: Option<(bool, f64)>,
 }
 
 fn today() -> NaiveDate {
@@ -203,6 +206,7 @@ impl BudgetApp {
             bank_found: Vec::new(),
             bank_files: Vec::new(),
             picker: None,
+            file_access: None,
         }
     }
 
@@ -576,6 +580,7 @@ impl BudgetApp {
 
     // ---------------------------------------------------------------- Bank statements
     fn bank_tab(&mut self, ui: &mut egui::Ui) {
+        self.file_access_banner(ui);
         theme::section_title(ui, "🏦", "Bank & card statements");
         ui.label(
             "Import CSV statements from your bank or card (download them from the bank's website). \
@@ -956,6 +961,7 @@ impl BudgetApp {
 
     // ---------------------------------------------------------------- Import / Export
     fn import_export(&mut self, ui: &mut egui::Ui) {
+        self.file_access_banner(ui);
         theme::section_title(ui, "📥", "Import");
         ui.label(
             "Accepts your monthly summary spreadsheet (exported as CSV), or a list with columns like \
@@ -1277,7 +1283,7 @@ impl BudgetApp {
 }
 
 
-const PERMISSION_HELP: &str = "If files don't show up, give Budget file access: Settings > Apps > Budget > Permissions > Files (\"Allow management of all files\").";
+const PERMISSION_HELP: &str = "If files don't show up, turn on All files access for Budget: Settings > Apps > Special app access > All files access > Budget.";
 
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1339,6 +1345,36 @@ impl Picker {
 }
 
 impl BudgetApp {
+    /// Android: warn and offer a button when the app can't see other apps' files in Downloads.
+    #[allow(unused_variables)]
+    fn file_access_banner(&mut self, ui: &mut egui::Ui) {
+        #[cfg(target_os = "android")]
+        {
+            let now = ui.input(|i| i.time);
+            let fresh = matches!(self.file_access, Some((_, t)) if now - t < 2.0);
+            if !fresh {
+                self.file_access = Some((crate::android_perm::has_all_files_access(), now));
+            }
+            if matches!(self.file_access, Some((true, _))) {
+                return;
+            }
+            theme::tinted_card(theme::AMBER).show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.label(RichText::new("⚠  Budget can't see your Downloads yet").strong().color(theme::AMBER));
+                ui.label(theme::muted(
+                    "Android only shows files saved by other apps (like a CSV from your browser) to apps with \"All files access\". Tap below, turn it on for Budget, then come back.",
+                ));
+                if theme::primary_button(ui, "🔓  Grant file access").clicked() {
+                    if let Err(e) = crate::android_perm::open_all_files_settings() {
+                        self.error(format!("Couldn't open settings ({e}). {PERMISSION_HELP}"));
+                    }
+                    self.file_access = None;
+                }
+            });
+            ui.add_space(4.0);
+        }
+    }
+
     fn picker_window(&mut self, ctx: &egui::Context) {
         let Some(mut picker) = self.picker.take() else { return };
         let mut open = true;
@@ -1366,6 +1402,7 @@ impl BudgetApp {
                         }
                     }
                 });
+                self.file_access_banner(ui);
                 ui.label(theme::muted(picker.dir.display().to_string()).small());
                 if let Some(parent) = picker.dir.parent() {
                     if ui.button("⬆  Up one folder").clicked() {

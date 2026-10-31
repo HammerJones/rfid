@@ -1,5 +1,7 @@
 //! Budget planner: scheduled expenses, monthly summaries, CSV import/export.
 
+#[cfg(target_os = "android")]
+mod android_perm;
 pub mod app;
 pub mod bank;
 pub mod csvio;

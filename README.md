@@ -63,7 +63,7 @@ set CARGO_APK_RELEASE_KEYSTORE_PASSWORD=android
 
 - If the top bar sits under your phone's status bar or camera, or the bottom tabs sit under the gesture bar, adjust **Settings > Screen spacing**.
 
-- **File access:** after installing, give Budget file access once: Settings > Apps > Budget > Permissions > Files and media (or Special app access > All files access) > Allow. Without it, the app can't see your Downloads.
+- **File access:** Android only shows CSVs saved by other apps (your browser, Drive) to apps with "All files access". The Files and Bank tabs show a **Grant file access** button that opens that switch. You can also find it at Settings > Apps > Special app access > All files access > Budget.
 - **Importing:** tap "Choose a CSV file" (Files tab) or "Choose statement CSV" (Bank tab). A built-in browser lists CSV files in Downloads, Documents and other folders, newest first.
 - **Exporting:** CSVs are saved to `Download/Budget/` on your phone, where any file manager, email or Drive app can find them.
 - Amounts use drag/tap number fields. Text fields open the on-screen keyboard.
