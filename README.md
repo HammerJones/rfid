@@ -63,10 +63,9 @@ set CARGO_APK_RELEASE_KEYSTORE_PASSWORD=android
 
 - If the top bar sits under your phone's status bar or camera, or the bottom tabs sit under the gesture bar, adjust **Settings > Screen spacing**.
 
-- Android has no file picker in this app yet. Files go through the app's folder, `Android/data/com.hammerjones.budget/files/`:
-  - Exports are saved there and also copied to the clipboard.
-  - To import a budget, put `import.csv` there; for a statement, `statement.csv`.
-  - You can also paste CSV text into the paste boxes.
+- **File access:** after installing, give Budget file access once: Settings > Apps > Budget > Permissions > Files and media (or Special app access > All files access) > Allow. Without it, the app can't see your Downloads.
+- **Importing:** tap "Choose a CSV file" (Files tab) or "Choose statement CSV" (Bank tab). A built-in browser lists CSV files in Downloads, Documents and other folders, newest first.
+- **Exporting:** CSVs are saved to `Download/Budget/` on your phone, where any file manager, email or Drive app can find them.
 - Amounts use drag/tap number fields. Text fields open the on-screen keyboard.
 
 ## Importing bank statements

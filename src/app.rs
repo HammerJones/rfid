@@ -146,6 +146,7 @@ pub struct BudgetApp {
     bank_txns: Vec<Txn>,
     bank_found: Vec<(Recurring, bool)>,
     bank_files: Vec<String>,
+    picker: Option<Picker>,
 }
 
 fn today() -> NaiveDate {
@@ -201,6 +202,7 @@ impl BudgetApp {
             bank_txns: Vec::new(),
             bank_found: Vec::new(),
             bank_files: Vec::new(),
+            picker: None,
         }
     }
 
@@ -595,14 +597,8 @@ impl BudgetApp {
                 }
             }
             #[cfg(target_os = "android")]
-            {
-                let p = storage::export_dir().join("statement.csv");
-                if ui.button("Import statement.csv").on_hover_text(p.display().to_string()).clicked() {
-                    match std::fs::read_to_string(&p) {
-                        Ok(text) => self.add_statement("statement.csv", &text),
-                        Err(e) => self.error(format!("Copy your statement to {} first ({e}).", p.display())),
-                    }
-                }
+            if theme::primary_button(ui, "📂  Choose statement CSV").clicked() {
+                self.picker = Some(Picker::open(PickFor::Statement));
             }
             if !self.bank_txns.is_empty() && ui.button("Clear").clicked() {
                 self.bank_txns.clear();
@@ -610,6 +606,7 @@ impl BudgetApp {
                 self.bank_files.clear();
             }
         });
+        #[cfg(not(target_os = "android"))]
         ui.collapsing("Or paste statement CSV text", |ui| {
             egui::ScrollArea::vertical().id_salt("paste_bank").max_height(140.0).show(ui, |ui| {
                 ui.add(egui::TextEdit::multiline(&mut self.import_text).desired_rows(5).desired_width(f32::INFINITY).code_editor());
@@ -974,16 +971,10 @@ impl BudgetApp {
             }
         }
         #[cfg(target_os = "android")]
-        {
-            let p = storage::export_dir().join("import.csv");
-            ui.label(format!("To import a file, copy it to {} and tap below, or paste the CSV text.", p.display()));
-            if ui.button("Import import.csv").clicked() {
-                match std::fs::read_to_string(&p) {
-                    Ok(text) => self.preview_import(&text),
-                    Err(e) => self.error(format!("Couldn't read {}: {e}", p.display())),
-                }
-            }
+        if theme::primary_button(ui, "📂  Choose a CSV file").clicked() {
+            self.picker = Some(Picker::open(PickFor::Budget));
         }
+        #[cfg(not(target_os = "android"))]
         ui.collapsing("Or paste CSV text", |ui| {
             egui::ScrollArea::vertical().id_salt("paste_import").max_height(160.0).show(ui, |ui| {
                 ui.add(egui::TextEdit::multiline(&mut self.import_text).desired_rows(6).desired_width(f32::INFINITY).code_editor());
@@ -1110,10 +1101,10 @@ impl BudgetApp {
         }
         #[cfg(target_os = "android")]
         {
-            ctx.copy_text(text.clone());
+            let _ = ctx;
             match storage::write_export(name, &text) {
-                Ok(p) => self.info(format!("Saved {} (also copied to clipboard)", p.display())),
-                Err(e) => self.error(format!("Couldn't save: {e}. The CSV was copied to the clipboard.")),
+                Ok(p) => self.info(format!("Saved to {}", p.display())),
+                Err(e) => self.error(format!("Couldn't save: {e}. {}", PERMISSION_HELP)),
             }
         }
     }
@@ -1281,6 +1272,154 @@ impl BudgetApp {
             });
         if close {
             self.confirm_delete = None;
+        }
+    }
+}
+
+
+const PERMISSION_HELP: &str = "If files don't show up, give Budget file access: Settings > Apps > Budget > Permissions > Files (\"Allow management of all files\").";
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PickFor {
+    Budget,
+    Statement,
+}
+
+/// A simple built-in file browser. Android has no native file dialog from Rust,
+/// so this lists CSV files from shared storage (Downloads, Documents, ...).
+struct Picker {
+    purpose: PickFor,
+    dir: std::path::PathBuf,
+    entries: Vec<(std::path::PathBuf, String, bool)>,
+    error: Option<String>,
+}
+
+impl Picker {
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    fn open(purpose: PickFor) -> Self {
+        let dir = storage::picker_roots().into_iter().next().map(|r| r.1).unwrap_or_else(|| std::path::PathBuf::from("."));
+        let mut p = Picker { purpose, dir, entries: Vec::new(), error: None };
+        p.refresh();
+        p
+    }
+
+    fn refresh(&mut self) {
+        self.entries.clear();
+        self.error = None;
+        match std::fs::read_dir(&self.dir) {
+            Ok(rd) => {
+                let mut dirs = Vec::new();
+                let mut files = Vec::new();
+                for e in rd.flatten() {
+                    let path = e.path();
+                    let name = e.file_name().to_string_lossy().to_string();
+                    if name.starts_with('.') {
+                        continue;
+                    }
+                    let meta = e.metadata().ok();
+                    if path.is_dir() {
+                        dirs.push((path, name, true));
+                    } else {
+                        let lower = name.to_lowercase();
+                        if lower.ends_with(".csv") || lower.ends_with(".txt") {
+                            let modified = meta.and_then(|m| m.modified().ok()).unwrap_or(std::time::UNIX_EPOCH);
+                            files.push((modified, (path, name, false)));
+                        }
+                    }
+                }
+                dirs.sort_by_key(|d| d.1.to_lowercase());
+                files.sort_by(|a, b| b.0.cmp(&a.0)); // newest first
+                self.entries = dirs;
+                self.entries.extend(files.into_iter().map(|f| f.1));
+            }
+            Err(e) => self.error = Some(format!("Can't open this folder ({e}). {PERMISSION_HELP}")),
+        }
+    }
+}
+
+impl BudgetApp {
+    fn picker_window(&mut self, ctx: &egui::Context) {
+        let Some(mut picker) = self.picker.take() else { return };
+        let mut open = true;
+        let mut chosen: Option<std::path::PathBuf> = None;
+        let mut go_to: Option<std::path::PathBuf> = None;
+        let width = (ctx.screen_rect().width() - 24.0).clamp(260.0, 520.0);
+        let height = (ctx.screen_rect().height() * 0.6).clamp(240.0, 520.0);
+        let title = match picker.purpose {
+            PickFor::Budget => "Choose a budget CSV",
+            PickFor::Statement => "Choose a bank statement",
+        };
+        egui::Window::new(title)
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(width)
+            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, self.budget.settings.safe_top + 60.0))
+            .show(ctx, |ui| {
+                ui.set_width(width - 32.0);
+                ui.horizontal_wrapped(|ui| {
+                    for (label, path) in storage::picker_roots() {
+                        let selected = picker.dir == path;
+                        if ui.selectable_label(selected, label).clicked() {
+                            go_to = Some(path);
+                        }
+                    }
+                });
+                ui.label(theme::muted(picker.dir.display().to_string()).small());
+                if let Some(parent) = picker.dir.parent() {
+                    if ui.button("⬆  Up one folder").clicked() {
+                        go_to = Some(parent.to_path_buf());
+                    }
+                }
+                ui.separator();
+                egui::ScrollArea::vertical().id_salt("picker_list").max_height(height).show(ui, |ui| {
+                    if let Some(err) = &picker.error {
+                        ui.colored_label(theme::BAD, err);
+                    } else if picker.entries.is_empty() {
+                        ui.label(theme::muted(format!("No CSV files here. {PERMISSION_HELP}")));
+                    }
+                    for (path, name, is_dir) in &picker.entries {
+                        let (icon, color) = if *is_dir { ("📁", theme::AMBER) } else { ("📄", theme::ACCENT) };
+                        let resp = egui::Frame::new()
+                            .inner_margin(egui::Margin::symmetric(6, 8))
+                            .show(ui, |ui| {
+                                ui.set_min_width(ui.available_width());
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(icon).color(color));
+                                    ui.add(egui::Label::new(RichText::new(name).color(theme::TEXT)).truncate());
+                                });
+                            })
+                            .response
+                            .interact(egui::Sense::click());
+                        if resp.clicked() {
+                            if *is_dir {
+                                go_to = Some(path.clone());
+                            } else {
+                                chosen = Some(path.clone());
+                            }
+                        }
+                    }
+                });
+            });
+
+        if let Some(dir) = go_to {
+            picker.dir = dir;
+            picker.refresh();
+        }
+        if let Some(path) = chosen {
+            let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            match std::fs::read_to_string(&path) {
+                Ok(text) => match picker.purpose {
+                    PickFor::Budget => self.preview_import(&text),
+                    PickFor::Statement => self.add_statement(&name, &text),
+                },
+                Err(e) => self.error(format!("Couldn't read {name}: {e}. {PERMISSION_HELP}")),
+            }
+            return; // close the picker
+        }
+        if open {
+            self.picker = Some(picker);
         }
     }
 }
@@ -1534,6 +1673,7 @@ impl eframe::App for BudgetApp {
 
         self.editor_window(ctx);
         self.delete_dialog(ctx);
+        self.picker_window(ctx);
 
         if self.dirty {
             self.dirty = false;

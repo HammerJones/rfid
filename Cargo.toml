@@ -40,6 +40,19 @@ target_sdk_version = 34
 [package.metadata.android.application]
 label = "Budget"
 
+# Read CSVs from Downloads and save exports there.
+# Android 11+: the user grants "All files access" in the app's settings.
+[[package.metadata.android.uses_permission]]
+name = "android.permission.MANAGE_EXTERNAL_STORAGE"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.READ_EXTERNAL_STORAGE"
+max_sdk_version = 32
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.WRITE_EXTERNAL_STORAGE"
+max_sdk_version = 29
+
 [profile.release]
 opt-level = 3
 lto = true
