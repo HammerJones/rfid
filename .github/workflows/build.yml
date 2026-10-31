@@ -37,30 +37,55 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
       - name: Install Android platform and build tools
-        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0"
-      - run: cargo install cargo-apk --locked
-      - name: Make a signing key (self-signed, fine for sideloading)
-        run: keytool -genkeypair -v -keystore "$RUNNER_TEMP/budget.keystore" -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Budget"
-      - name: Build APK
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0" > /dev/null
+      - run: cargo install cargo-ndk --locked
+
+      # Keep the same signing key between builds so new versions install over old ones.
+      - name: Restore signing key
+        id: key
+        uses: actions/cache@v4
+        with:
+          path: android/budget.keystore
+          key: budget-signing-key-v1
+      - name: Make a signing key (first build only)
+        if: steps.key.outputs.cache-hit != 'true'
+        run: keytool -genkeypair -keystore android/budget.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Budget"
+
+      - name: Build the Rust library
         shell: bash
-        env:
-          CARGO_APK_RELEASE_KEYSTORE: ${{ runner.temp }}/budget.keystore
-          CARGO_APK_RELEASE_KEYSTORE_PASSWORD: android
         run: |
-          # The runner sets ANDROID_NDK_LATEST_HOME; cargo-apk looks for ANDROID_NDK_ROOT.
-          export ANDROID_NDK_ROOT="${ANDROID_NDK_ROOT:-$ANDROID_NDK_LATEST_HOME}"
-          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
-          echo "NDK: $ANDROID_NDK_ROOT"
-          echo "SDK: $ANDROID_SDK_ROOT"
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          export ANDROID_NDK_ROOT="$ANDROID_NDK_LATEST_HOME"
           set -o pipefail
-          if ! cargo apk build --release --lib 2>&1 | tee build.log; then
-            # Put the end of the log in one annotation so it's readable without the full log.
-            msg=$(grep -v "^ *Compiling\|^ *Downloaded\|^ *Downloading" build.log | tail -40 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
-            echo "::error title=cargo apk build failed::${msg}"
+          if ! cargo ndk -t arm64-v8a -P 26 -o android/app/src/main/jniLibs build --release --lib 2>&1 | tee rust.log; then
+            msg=$(grep -v "^ *Compiling\|^ *Downloaded\|^ *Downloading" rust.log | tail -40 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=Rust Android build failed::${msg}"
             exit 1
           fi
+          SO=android/app/src/main/jniLibs/arm64-v8a/libbudget_app.so
+          ls -la "$SO"
+          # Ship the C++ runtime too if the library needs it.
+          if readelf -d "$SO" | grep -q "libc++_shared"; then
+            cp "$(find "$ANDROID_NDK_HOME" -path "*aarch64-linux-android/libc++_shared.so" | head -1)" android/app/src/main/jniLibs/arm64-v8a/
+          fi
+      - name: Build APK
+        shell: bash
+        working-directory: android
+        env:
+          BUDGET_KEYSTORE: ${{ github.workspace }}/android/budget.keystore
+        run: |
+          set -o pipefail
+          if ! gradle assembleRelease --no-daemon --console=plain -PversionCode=${{ github.run_number }} 2>&1 | tee gradle.log; then
+            msg=$(grep -E "^e: |error:|ERROR|What went wrong|FAILED|Exception|^> " gradle.log | head -40 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=Gradle build failed::${msg}"
+            exit 1
+          fi
+          mkdir -p ../apk && cp app/build/outputs/apk/release/*.apk ../apk/Budget.apk
       - uses: actions/upload-artifact@v4
         with:
           name: budget-android
-          path: target/release/apk/*.apk
+          path: apk/Budget.apk

@@ -232,6 +232,26 @@ pub struct Budget {
     pub categories: Vec<String>,
     pub expenses: Vec<Expense>,
     pub next_id: u64,
+    /// Daily spending budget settings.
+    #[serde(default)]
+    pub daily: DailySettings,
+}
+
+/// Settings for the daily spending budget and auto-tracked purchases.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct DailySettings {
+    /// Monthly spending money to spread across the days. 0 = work it out from the budget.
+    #[serde(default)]
+    pub monthly_override: f64,
+    /// Purchase ids that shouldn't count against the daily budget.
+    #[serde(default)]
+    pub ignored: Vec<String>,
+    /// Merchants paid as bills (already in the budget), as merchant keys like "COLORADO STATION".
+    #[serde(default)]
+    pub bill_merchants: Vec<String>,
+    /// Turn off the always-on daily budget notification (Android).
+    #[serde(default)]
+    pub hide_notification: bool,
 }
 
 impl Default for Budget {
@@ -241,6 +261,7 @@ impl Default for Budget {
             categories: vec![],
             expenses: vec![],
             next_id: 1,
+            daily: DailySettings::default(),
         }
     }
 }
@@ -387,6 +408,31 @@ impl Budget {
             total_expenses,
             left_over: income - savings - total_expenses,
         }
+    }
+
+    /// Monthly bills for the daily budget: every expense due this month at its real amount.
+    /// A left-over line (like rent) counts at the amount entered for it, if any.
+    pub fn monthly_bills(&self, any_day: NaiveDate) -> f64 {
+        let start = month_start(any_day.year(), any_day.month());
+        let end = month_end(start);
+        self.expenses
+            .iter()
+            .map(|e| {
+                if e.is_remainder {
+                    e.amount.max(0.0)
+                } else {
+                    e.amount * e.due_dates_between(start, end).len() as f64
+                }
+            })
+            .sum()
+    }
+
+    /// Money for day-to-day spending this month: income minus savings and bills.
+    pub fn spending_money(&self, any_day: NaiveDate) -> f64 {
+        if self.daily.monthly_override > 0.0 {
+            return self.daily.monthly_override;
+        }
+        (self.settings.monthly_income() - self.settings.monthly_savings() - self.monthly_bills(any_day)).max(0.0)
     }
 
     /// Every (date, expense) due in `from..=to`, sorted by date.

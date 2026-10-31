@@ -2,6 +2,7 @@
 
 use crate::bank::{self, Recurring, Txn};
 use crate::csvio::{self, money, ImportResult};
+use crate::daily::{self, Purchase};
 use crate::model::{self, Budget, Expense, Frequency, IncomeMode};
 use crate::storage;
 use crate::theme;
@@ -11,14 +12,15 @@ use eframe::egui::{self, Color32, RichText};
 
 const SAMPLE_SHEET: &str = include_str!("../tests/sample_sheet.csv");
 
-const TABS: [Tab; 6] = [Tab::Overview, Tab::Expenses, Tab::Calendar, Tab::Bank, Tab::Settings, Tab::ImportExport];
+const TABS: [Tab; 7] = [Tab::Today, Tab::Overview, Tab::Expenses, Tab::Calendar, Tab::Bank, Tab::Settings, Tab::ImportExport];
 
 /// (icon, full label, short label for the phone nav bar)
 fn tab_info(t: Tab) -> (&'static str, &'static str, &'static str) {
     match t {
-        Tab::Overview => ("📊", "Overview", "Home"),
+        Tab::Today => ("⛽", "Today", "Today"),
+        Tab::Overview => ("📊", "Overview", "Month"),
         Tab::Expenses => ("💳", "Expenses", "Bills"),
-        Tab::Calendar => ("📅", "Schedule", "Calendar"),
+        Tab::Calendar => ("📅", "Schedule", "Dates"),
         Tab::Bank => ("🏦", "Bank", "Bank"),
         Tab::Settings => ("⚙", "Settings", "Settings"),
         Tab::ImportExport => ("📂", "Import / Export", "Files"),
@@ -27,6 +29,7 @@ fn tab_info(t: Tab) -> (&'static str, &'static str, &'static str) {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
+    Today,
     Overview,
     Expenses,
     Calendar,
@@ -150,6 +153,16 @@ pub struct BudgetApp {
     /// Cached result of the Android "All files access" check, and when it was taken.
     #[allow(dead_code)]
     file_access: Option<(bool, f64)>,
+    /// Auto-tracked and hand-added purchases (purchases.tsv), and when it was last read.
+    purchases: Vec<Purchase>,
+    purchases_read_at: f64,
+    #[allow(dead_code)]
+    notif_access: Option<(bool, f64)>,
+    add_amount: f64,
+    add_merchant: String,
+    show_all_purchases: bool,
+    /// Last widget.json written, so it's only rewritten when something changes.
+    widget_written: String,
 }
 
 fn today() -> NaiveDate {
@@ -188,7 +201,7 @@ impl BudgetApp {
         };
         BudgetApp {
             budget,
-            tab: Tab::Overview,
+            tab: Tab::Today,
             view_month: first_of(today()),
             selected_day: Some(today()),
             editor: None,
@@ -207,6 +220,13 @@ impl BudgetApp {
             bank_files: Vec::new(),
             picker: None,
             file_access: None,
+            purchases: daily::load_purchases(&storage::data_dir()),
+            purchases_read_at: 0.0,
+            notif_access: None,
+            add_amount: 0.0,
+            add_merchant: String::new(),
+            show_all_purchases: false,
+            widget_written: String::new(),
         }
     }
 
@@ -242,6 +262,299 @@ impl BudgetApp {
 
     fn category_colors(&self) -> HashMap<String, usize> {
         self.budget.ordered_categories().into_iter().enumerate().map(|(i, c)| (c, i)).collect()
+    }
+
+    // ---------------------------------------------------------------- Today
+    /// Keep widget.json in step with the budget (the home screen widget reads it).
+    fn update_widget_file(&mut self) {
+        let json = daily::widget_json(&self.budget, today());
+        if json != self.widget_written {
+            daily::write_widget_file(&storage::data_dir(), &self.budget, today());
+            self.widget_written = json;
+            #[cfg(target_os = "android")]
+            crate::android_perm::refresh_widget();
+        }
+    }
+
+    fn reload_purchases(&mut self) {
+        self.purchases = daily::load_purchases(&storage::data_dir());
+    }
+
+    #[allow(unused_variables)]
+    fn notification_banner(&mut self, ui: &mut egui::Ui) {
+        #[cfg(target_os = "android")]
+        {
+            let now = ui.input(|i| i.time);
+            let fresh = matches!(self.notif_access, Some((_, t)) if now - t < 2.0);
+            if !fresh {
+                self.notif_access = Some((crate::android_perm::has_notification_access(), now));
+            }
+            if matches!(self.notif_access, Some((true, _))) {
+                return;
+            }
+            theme::tinted_card(theme::AMBER).show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.label(RichText::new("🔔  Turn on auto-tracking").strong().color(theme::AMBER));
+                ui.label(theme::muted(
+                    "Budget logs purchases from Google Wallet and PayPal notifications. Tap below and turn on Notification access for Budget.",
+                ));
+                ui.add_space(2.0);
+                ui.label(theme::muted(
+                    "If Android says it's a restricted setting: open App info, tap ⋮ (top right) > Allow restricted settings, then try again.",
+                ).size(12.5));
+                ui.horizontal_wrapped(|ui| {
+                    if theme::primary_button(ui, "🔔  Notification access").clicked() {
+                        if let Err(e) = crate::android_perm::open_notification_settings() {
+                            self.error(format!("Couldn't open settings ({e}). Look in Settings > Notifications > Device & app notifications."));
+                        }
+                        self.notif_access = None;
+                    }
+                    if ui.button("ℹ  App info").clicked() {
+                        let _ = crate::android_perm::open_app_info();
+                        self.notif_access = None;
+                    }
+                });
+            });
+            ui.add_space(4.0);
+        }
+    }
+
+    fn today_tab(&mut self, ui: &mut egui::Ui) {
+        // Pick up new purchases the background listener logged.
+        let now = ui.input(|i| i.time);
+        if now - self.purchases_read_at > 2.0 {
+            self.purchases_read_at = now;
+            self.reload_purchases();
+        }
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs(3));
+
+        let day = today();
+        let st = daily::status(&self.budget, &self.purchases, day);
+        let fuel = st.fuel();
+        let color = [theme::GOOD, theme::AMBER, theme::BAD][st.level() as usize];
+
+        theme::tinted_card(color).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(theme::muted(day.format("%A, %B %-d").to_string()));
+            ui.horizontal(|ui| {
+                let w = (ui.available_width() * 0.45).clamp(130.0, 220.0);
+                fuel_dial(ui, fuel, color, w);
+                ui.vertical(|ui| {
+                    ui.add_space(8.0);
+                    let (amount, caption) = if st.left_today >= 0.0 {
+                        (money(st.left_today), "left today")
+                    } else {
+                        (money(-st.left_today), "over today")
+                    };
+                    ui.label(RichText::new(amount).size(30.0).strong().color(color));
+                    ui.label(RichText::new(caption).size(16.0).color(theme::TEXT));
+                    ui.label(theme::muted(format!("of {} you can spend today", money(st.today_max))));
+                });
+            });
+            ui.add_space(6.0);
+            ui.columns(3, |c| {
+                mini_stat(&mut c[0], "Spent today", &money(st.spent_today));
+                mini_stat(&mut c[1], "Days left", &st.days_left.to_string());
+                mini_stat(&mut c[2], "Left this month", &money(st.month_money - st.spent_before_today - st.spent_today));
+            });
+        });
+        ui.label(
+            theme::muted(format!(
+                "Spending money this month: {}. Go over today and tomorrow's amount shrinks; spend less and it grows.",
+                money(st.month_money)
+            ))
+            .size(12.5),
+        );
+
+        // Left-over line (rent) with no real amount: the daily budget can't account for it.
+        if let Some(e) = self.budget.expenses.iter().find(|e| e.is_remainder && e.amount <= 0.0).cloned() {
+            if self.budget.daily.monthly_override <= 0.0 {
+                theme::tinted_card(theme::AMBER).show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    ui.label(RichText::new(format!("⚠  What do you actually pay for {}?", e.name.to_lowercase())).strong().color(theme::AMBER));
+                    ui.label(theme::muted(format!(
+                        "\"{}\" is your left-over line, so it has no fixed amount. Enter what you really pay so the daily budget sets it aside.",
+                        e.name
+                    )));
+                    if ui.button(format!("✏  Edit {}", e.name)).clicked() {
+                        self.editor = Some(Editor::from_expense(&e));
+                    }
+                });
+            }
+        }
+
+        self.notification_banner(ui);
+
+        // Add by hand.
+        theme::section_title(ui, "➕", "Add a purchase");
+        theme::card().show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label("$");
+                ui.add(egui::DragValue::new(&mut self.add_amount).speed(0.5).range(0.0..=100_000.0).fixed_decimals(2));
+                ui.add(egui::TextEdit::singleline(&mut self.add_merchant).hint_text("Where (cash, online…)").desired_width(f32::INFINITY));
+            });
+            ui.add_space(4.0);
+            if ui.add_enabled(self.add_amount > 0.0, egui::Button::new("Add")).clicked() {
+                let merchant = if self.add_merchant.trim().is_empty() { "Purchase".to_string() } else { self.add_merchant.trim().to_string() };
+                let time = Local::now().format("%H:%M").to_string();
+                match daily::add_manual(&storage::data_dir(), day, &time, self.add_amount, &merchant) {
+                    Ok(()) => {
+                        self.info(format!("Added {} at {}.", money(self.add_amount), merchant));
+                        self.add_amount = 0.0;
+                        self.add_merchant.clear();
+                        self.reload_purchases();
+                        #[cfg(target_os = "android")]
+                        crate::android_perm::refresh_widget();
+                    }
+                    Err(e) => self.error(format!("Couldn't add it: {e}")),
+                }
+            }
+        });
+
+        // Purchases this month.
+        theme::section_title(ui, "📋", "Purchases this month");
+        let start = first_of(day);
+        let list: Vec<Purchase> = self.purchases.iter().filter(|p| p.date >= start).cloned().collect();
+        if list.is_empty() {
+            ui.label(theme::muted(
+                "Nothing logged yet. Purchases show up here when Google Wallet or PayPal notifies you, or when you add one above.",
+            ));
+        }
+        ui.label(theme::muted("🏠 = a bill already in your budget (rent, subscriptions). 🚫 = don't count it.").size(12.0));
+        let shown = if self.show_all_purchases { list.len() } else { list.len().min(25) };
+        let mut toggle_bill: Option<String> = None;
+        let mut toggle_ignore: Option<String> = None;
+        let mut remove: Option<String> = None;
+        let mut last_date: Option<NaiveDate> = None;
+        for p in &list[..shown] {
+            if last_date != Some(p.date) {
+                last_date = Some(p.date);
+                let label = if p.date == day { "Today".to_string() } else { p.date.format("%a %b %-d").to_string() };
+                ui.add_space(4.0);
+                ui.label(RichText::new(label).strong().color(theme::MUTED));
+            }
+            let bill = daily::is_bill(&self.budget, &p.merchant);
+            let ignored = self.budget.daily.ignored.contains(&p.id);
+            let counted = !bill && !ignored;
+            theme::card().inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    let mut bill_btn = egui::Button::new(if bill { RichText::new("🏠").color(theme::ACCENT) } else { theme::muted("🏠") });
+                    if bill {
+                        bill_btn = bill_btn.fill(theme::mix(theme::CARD, theme::ACCENT, 0.25));
+                    }
+                    let mut ign_btn = egui::Button::new(if ignored { RichText::new("🚫").color(theme::BAD) } else { theme::muted("🚫") });
+                    if ignored {
+                        ign_btn = ign_btn.fill(theme::mix(theme::CARD, theme::BAD, 0.25));
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if p.source == "manual" && ui.button(theme::muted("🗑")).on_hover_text("Delete").clicked() {
+                            remove = Some(p.id.clone());
+                        }
+                        if ui.add(ign_btn).on_hover_text("Don't count this one").clicked() {
+                            toggle_ignore = Some(p.id.clone());
+                        }
+                        if ui.add(bill_btn).on_hover_text("Bill already in my budget").clicked() {
+                            toggle_bill = Some(p.merchant.clone());
+                        }
+                        let amount_text = if p.amount < 0.0 { format!("+{}", money(-p.amount)) } else { money(p.amount) };
+                        let amount_color = if !counted {
+                            theme::MUTED
+                        } else if p.amount < 0.0 {
+                            theme::GOOD
+                        } else {
+                            theme::TEXT
+                        };
+                        ui.label(RichText::new(amount_text).strong().color(amount_color));
+                        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                            let mut title = RichText::new(&p.merchant).color(theme::TEXT);
+                            if !counted {
+                                title = title.strikethrough().color(theme::MUTED);
+                            }
+                            ui.add(egui::Label::new(title).truncate());
+                            let note = if bill { " · bill" } else if ignored { " · not counted" } else { "" };
+                            ui.add(egui::Label::new(theme::muted(format!("{} · {}{}", p.time, p.source_label(), note)).size(12.0)).truncate());
+                        });
+                    });
+                });
+            });
+        }
+        if list.len() > shown && ui.button(format!("Show all {}", list.len())).clicked() {
+            self.show_all_purchases = true;
+        }
+        if let Some(m) = toggle_bill {
+            let key = daily::bill_key(&m);
+            if daily::is_bill(&self.budget, &m) {
+                let upper = m.to_ascii_uppercase();
+                self.budget.daily.bill_merchants.retain(|k| !k.split(' ').all(|w| upper.contains(w)));
+            } else {
+                self.budget.daily.bill_merchants.push(key);
+            }
+            self.dirty = true;
+        }
+        if let Some(id) = toggle_ignore {
+            if let Some(i) = self.budget.daily.ignored.iter().position(|x| x == &id) {
+                self.budget.daily.ignored.remove(i);
+            } else {
+                self.budget.daily.ignored.push(id);
+            }
+            self.dirty = true;
+        }
+        if let Some(id) = remove {
+            if let Err(e) = daily::remove_manual(&storage::data_dir(), &id) {
+                self.error(format!("Couldn't delete it: {e}"));
+            }
+            self.reload_purchases();
+            #[cfg(target_os = "android")]
+            crate::android_perm::refresh_widget();
+        }
+
+        // Settings for the daily amount.
+        ui.add_space(6.0);
+        theme::section_title(ui, "⚙", "Daily budget settings");
+        theme::card().show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            let auto = (self.budget.settings.monthly_income() - self.budget.settings.monthly_savings() - self.budget.monthly_bills(day)).max(0.0);
+            ui.label(theme::muted(format!(
+                "Worked out from your budget: {} income − {} savings − {} bills = {} a month.",
+                money(self.budget.settings.monthly_income()),
+                money(self.budget.settings.monthly_savings()),
+                money(self.budget.monthly_bills(day)),
+                money(auto)
+            )));
+            let mut show = !self.budget.daily.hide_notification;
+            if ui.checkbox(&mut show, "Show today's budget in my notification bar").changed() {
+                self.budget.daily.hide_notification = !show;
+                self.dirty = true;
+            }
+            #[cfg(target_os = "android")]
+            if show && !crate::android_perm::has_notification_permission() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("Notifications are off for Budget.").color(theme::AMBER));
+                    if ui.button("🔔  Allow notifications").clicked() {
+                        let _ = crate::android_perm::open_app_notification_settings();
+                    }
+                });
+            }
+            ui.add_space(4.0);
+            let mut custom = self.budget.daily.monthly_override > 0.0;
+            if ui.checkbox(&mut custom, "Use my own monthly amount").changed() {
+                self.budget.daily.monthly_override = if custom { auto.max(1.0).round() } else { 0.0 };
+                self.dirty = true;
+            }
+            if custom {
+                ui.horizontal(|ui| {
+                    ui.label("Spending money per month: $");
+                    if ui
+                        .add(egui::DragValue::new(&mut self.budget.daily.monthly_override).speed(5.0).range(1.0..=1_000_000.0).fixed_decimals(0))
+                        .changed()
+                    {
+                        self.dirty = true;
+                    }
+                });
+            }
+        });
     }
 
     // ---------------------------------------------------------------- Overview
@@ -699,6 +1012,10 @@ impl BudgetApp {
                         is_remainder: false,
                         notes: format!("Found in bank statement ({} charges, last {}).", r.count, r.last),
                     });
+                    let key = r.key.to_ascii_uppercase();
+                    if !self.budget.daily.bill_merchants.contains(&key) {
+                        self.budget.daily.bill_merchants.push(key);
+                    }
                 }
                 self.bank_found.retain(|(_, s)| !*s);
                 self.dirty = true;
@@ -1471,6 +1788,52 @@ impl BudgetApp {
     }
 }
 
+/// The classic fuel dial (same look as the widget): E on the left, F on the right.
+fn fuel_dial(ui: &mut egui::Ui, frac: f32, color: Color32, width: f32) {
+    use std::f32::consts::PI;
+    let h = width * 0.66;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, h), egui::Sense::hover());
+    let p = ui.painter_at(rect.expand(4.0));
+    let stroke = width * 0.1;
+    let r = (width / 2.0 - stroke).min(h * 0.78 - stroke);
+    let c = egui::pos2(rect.center().x, rect.top() + h * 0.5 + r * 0.42);
+    // Angle t: 0 = E (left), 1 = F (right), going over the top.
+    let at = |t: f32, rad: f32| {
+        let a = PI + PI * t;
+        egui::pos2(c.x + rad * a.cos(), c.y + rad * a.sin())
+    };
+    let arc = |t0: f32, t1: f32, col: Color32| {
+        let n = ((t1 - t0) * 48.0).ceil().max(2.0) as usize;
+        let pts: Vec<egui::Pos2> = (0..=n).map(|i| at(t0 + (t1 - t0) * i as f32 / n as f32, r)).collect();
+        p.add(egui::Shape::line(pts, egui::Stroke::new(stroke, col)));
+    };
+    arc(0.0, 1.0, Color32::from_rgb(10, 13, 22));
+    arc(0.0, 0.25, theme::BAD.gamma_multiply(0.3));
+    arc(0.25, 0.5, theme::AMBER.gamma_multiply(0.3));
+    arc(0.5, 1.0, theme::GOOD.gamma_multiply(0.3));
+    let f = frac.clamp(0.0, 1.0);
+    if f > 0.005 {
+        arc(0.0, f, color);
+    }
+    for i in 1..4 {
+        let t = i as f32 / 4.0;
+        p.line_segment([at(t, r - stroke * 0.45), at(t, r + stroke * 0.45)], egui::Stroke::new(stroke * 0.16, Color32::from_white_alpha(150)));
+    }
+    let needle = egui::Stroke::new(stroke * 0.42, theme::TEXT);
+    p.line_segment([c, at(f, r * 0.82)], needle);
+    p.circle_filled(c, stroke * 0.52, theme::TEXT);
+    let font = egui::FontId::proportional(stroke * 1.15);
+    p.text(egui::pos2(c.x - r, c.y + stroke * 1.0), egui::Align2::CENTER_CENTER, "E", font.clone(), theme::BAD);
+    p.text(egui::pos2(c.x + r, c.y + stroke * 1.0), egui::Align2::CENTER_CENTER, "F", font, theme::GOOD);
+}
+
+fn mini_stat(ui: &mut egui::Ui, title: &str, value: &str) {
+    ui.vertical(|ui| {
+        ui.label(theme::muted(title).size(12.0));
+        ui.label(RichText::new(value).strong().color(theme::TEXT));
+    });
+}
+
 fn stat_card(ui: &mut egui::Ui, icon: &str, title: &str, value: &str, color: Color32) {
     theme::tinted_card(color).show(ui, |ui| {
         ui.set_min_width(ui.available_width());
@@ -1709,6 +2072,7 @@ impl eframe::App for BudgetApp {
             .frame(egui::Frame::new().fill(theme::BG).inner_margin(egui::Margin::symmetric(12, 8)))
             .show(ctx, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.tab {
+                Tab::Today => self.today_tab(ui),
                 Tab::Overview => self.overview(ui),
                 Tab::Expenses => self.expenses(ui),
                 Tab::Calendar => self.calendar(ui),
@@ -1728,6 +2092,7 @@ impl eframe::App for BudgetApp {
                 self.error(format!("Couldn't save your data: {e}"));
             }
         }
+        self.update_widget_file();
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

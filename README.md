@@ -37,29 +37,29 @@ Everything is saved automatically:
 
 ## Build for Android
 
-You need Android Studio's SDK and NDK. Install both from Android Studio > SDK Manager > SDK Tools: check "NDK (Side by side)" and an SDK Platform such as Android 14 (API 34).
+The Android app is a small Gradle project in `android/`. The Rust code runs as the app's main screen, and a few Kotlin files add the purchase tracker, the home screen widget and the daily budget notification.
+
+You need Android Studio (for the SDK and NDK), Rust and cargo-ndk:
 
 ```
 rustup target add aarch64-linux-android
-cargo install cargo-apk
-set ANDROID_HOME=%LOCALAPPDATA%\Android\Sdk
-set ANDROID_NDK_ROOT=%LOCALAPPDATA%\Android\Sdk\ndk\<version>
-cargo apk build --release --lib
+cargo install cargo-ndk
+cargo ndk -t arm64-v8a -P 26 -o android/app/src/main/jniLibs build --release --lib
 ```
 
-The APK is in `target\release\apk\`. Copy it to your phone and open it to install. You'll need to allow installs from that app.
-
-For a release build, cargo-apk needs a signing key:
+Then open the `android` folder in Android Studio and run it, or build from the command line with `gradle assembleRelease` inside `android/`. A release build needs a signing key at `android/budget.keystore` (store and key password `android`, alias `androiddebugkey`):
 
 ```
-keytool -genkeypair -keystore budget.keystore -alias androiddebugkey -keyalg RSA -validity 10000 -storepass android -keypass android -dname "CN=Budget"
-set CARGO_APK_RELEASE_KEYSTORE=%CD%\budget.keystore
-set CARGO_APK_RELEASE_KEYSTORE_PASSWORD=android
+keytool -genkeypair -keystore android/budget.keystore -alias androiddebugkey -keyalg RSA -validity 10000 -storepass android -keypass android -dname "CN=Budget"
 ```
 
-**Easier: let GitHub build both.** Push this folder to a GitHub repository. The workflow in `.github/workflows/build.yml` runs the tests and builds the Windows `.exe` and the Android `.apk`. Download them from the repo's Actions tab, under Artifacts.
+**Easier: let GitHub build both.** Push this folder to a GitHub repository. The workflow in `.github/workflows/build.yml` runs the tests and builds the Windows `.exe` and the Android `.apk`. Download them from the repo's Actions tab, under Artifacts. The workflow keeps the same signing key between builds, so new versions install over old ones.
 
 ### Android notes
+
+- **Today tab and daily budget:** your monthly income minus savings and bills, minus what you've spent this month, spread over the days left. Spend less today and tomorrow's amount grows; spend more and it shrinks. If your left-over line (like rent) has no amount, enter what you really pay so it's set aside.
+- **Auto-tracking:** turn on Notification access for Budget (the Today tab has a button). Purchases from Google Wallet, PayPal, Capital One, Venmo and Cash App notifications are logged as they arrive. Tap 🏠 on a purchase to treat that merchant as a bill already in your budget, or 🚫 to not count one purchase. On Android 13+, sideloaded apps may need App info > ⋮ > Allow restricted settings first.
+- **Widget and notification:** long-press your home screen > Widgets > Budget for the fuel dial. The always-on notification shows the same thing, and its status-bar icon shows the needle. Turn it off on the Today tab.
 
 - If the top bar sits under your phone's status bar or camera, or the bottom tabs sit under the gesture bar, adjust **Settings > Screen spacing**.
 

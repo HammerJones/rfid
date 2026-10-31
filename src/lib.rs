@@ -5,6 +5,7 @@ mod android_perm;
 pub mod app;
 pub mod bank;
 pub mod csvio;
+pub mod daily;
 pub mod model;
 pub mod storage;
 pub mod theme;
@@ -18,7 +19,8 @@ pub fn run_desktop() -> eframe::Result<()> {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title(APP_NAME)
             .with_inner_size([1000.0, 760.0])
-            .with_min_inner_size([360.0, 480.0]),
+            .with_min_inner_size([360.0, 480.0])
+            .with_icon(eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")).unwrap_or_default()),
         ..Default::default()
     };
     eframe::run_native(APP_NAME, options, Box::new(|cc| Ok(Box::new(app::BudgetApp::new(cc)))))

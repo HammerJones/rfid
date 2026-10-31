@@ -65,3 +65,101 @@ pub fn open_all_files_settings() -> Result<(), String> {
         Ok(())
     })
 }
+
+/// True when "Notification access" is on for this app (needed to log Wallet/PayPal purchases).
+pub fn has_notification_access() -> bool {
+    with_env(|env, activity| {
+        let resolver = env.call_method(activity, "getContentResolver", "()Landroid/content/ContentResolver;", &[])?.l()?;
+        let key = env.new_string("enabled_notification_listeners")?;
+        let value = env
+            .call_static_method(
+                "android/provider/Settings$Secure",
+                "getString",
+                "(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;",
+                &[JValue::Object(&resolver), JValue::Object(&key)],
+            )?
+            .l()?;
+        if value.is_null() {
+            return Ok(false);
+        }
+        let text: String = env.get_string(&jni::objects::JString::from(value))?.into();
+        Ok(text.contains(PACKAGE))
+    })
+    .unwrap_or(false)
+}
+
+/// Open the Notification access screen.
+pub fn open_notification_settings() -> Result<(), String> {
+    with_env(|env, activity| {
+        let action = env.new_string("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")?;
+        let intent = env.new_object("android/content/Intent", "(Ljava/lang/String;)V", &[JValue::Object(&action)])?;
+        env.call_method(&intent, "addFlags", "(I)Landroid/content/Intent;", &[JValue::Int(FLAG_ACTIVITY_NEW_TASK)])?;
+        env.call_method(activity, "startActivity", "(Landroid/content/Intent;)V", &[JValue::Object(&intent)])?;
+        Ok(())
+    })
+}
+
+/// Open this app's App info page (where "Allow restricted settings" lives on Android 13+).
+pub fn open_app_info() -> Result<(), String> {
+    with_env(|env, activity| {
+        let action = env.new_string("android.settings.APPLICATION_DETAILS_SETTINGS")?;
+        let uri_text = env.new_string(format!("package:{PACKAGE}"))?;
+        let uri = env
+            .call_static_method("android/net/Uri", "parse", "(Ljava/lang/String;)Landroid/net/Uri;", &[JValue::Object(&uri_text)])?
+            .l()?;
+        let intent = env.new_object("android/content/Intent", "(Ljava/lang/String;Landroid/net/Uri;)V", &[JValue::Object(&action), JValue::Object(&uri)])?;
+        env.call_method(&intent, "addFlags", "(I)Landroid/content/Intent;", &[JValue::Int(FLAG_ACTIVITY_NEW_TASK)])?;
+        env.call_method(activity, "startActivity", "(Landroid/content/Intent;)V", &[JValue::Object(&intent)])?;
+        Ok(())
+    })
+}
+
+/// True when the app may post notifications (always true before Android 13).
+pub fn has_notification_permission() -> bool {
+    with_env(|env, activity| {
+        if sdk_int(env)? < 33 {
+            return Ok(true);
+        }
+        let p = env.new_string("android.permission.POST_NOTIFICATIONS")?;
+        let r = env.call_method(activity, "checkSelfPermission", "(Ljava/lang/String;)I", &[JValue::Object(&p)])?.i()?;
+        Ok(r == 0)
+    })
+    .unwrap_or(false)
+}
+
+/// Open this app's notification settings, where notifications can be allowed.
+pub fn open_app_notification_settings() -> Result<(), String> {
+    with_env(|env, activity| {
+        let action = env.new_string("android.settings.APP_NOTIFICATION_SETTINGS")?;
+        let intent = env.new_object("android/content/Intent", "(Ljava/lang/String;)V", &[JValue::Object(&action)])?;
+        let key = env.new_string("android.provider.extra.APP_PACKAGE")?;
+        let pkg = env.new_string(PACKAGE)?;
+        env.call_method(
+            &intent,
+            "putExtra",
+            "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
+            &[JValue::Object(&key), JValue::Object(&pkg)],
+        )?;
+        env.call_method(&intent, "addFlags", "(I)Landroid/content/Intent;", &[JValue::Int(FLAG_ACTIVITY_NEW_TASK)])?;
+        env.call_method(activity, "startActivity", "(Landroid/content/Intent;)V", &[JValue::Object(&intent)])?;
+        Ok(())
+    })
+}
+
+/// Tell the home screen widget to redraw (after widget.json changed).
+pub fn refresh_widget() {
+    let _ = with_env(|env, activity| {
+        let action = env.new_string(format!("{PACKAGE}.REFRESH_WIDGET"))?;
+        let intent = env.new_object("android/content/Intent", "(Ljava/lang/String;)V", &[JValue::Object(&action)])?;
+        let pkg = env.new_string(PACKAGE)?;
+        let cls = env.new_string(format!("{PACKAGE}.BudgetWidget"))?;
+        env.call_method(
+            &intent,
+            "setClassName",
+            "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
+            &[JValue::Object(&pkg), JValue::Object(&cls)],
+        )?;
+        env.call_method(activity, "sendBroadcast", "(Landroid/content/Intent;)V", &[JValue::Object(&intent)])?;
+        Ok(())
+    });
+}
