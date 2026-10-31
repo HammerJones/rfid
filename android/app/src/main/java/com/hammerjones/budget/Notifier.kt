@@ -22,6 +22,7 @@ object Notifier {
     fun refreshAll(ctx: Context) {
         try { BudgetWidget.updateAll(ctx) } catch (e: Exception) {}
         try { update(ctx) } catch (e: Exception) {}
+        try { MealNotifier.update(ctx) } catch (e: Exception) {}
         try { scheduleMidnight(ctx) } catch (e: Exception) {}
     }
 

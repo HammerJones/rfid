@@ -40,6 +40,10 @@ object Daily {
             return DayStatus(ready = false)
         }
         val monthMoney = j.optDouble("month_money", 0.0)
+        val cutoff = j.optDouble("cutoff", 0.0)
+        val planJson = j.optJSONObject("plan")
+        val evenly = monthMoney / YearMonth.from(today).lengthOfMonth()
+        fun planFor(d: LocalDate): Double = planJson?.optDouble(d.toString(), evenly)?.takeIf { !it.isNaN() } ?: evenly
         val notify = !j.optBoolean("hide_notification", false)
         val ignored = HashSet<String>()
         j.optJSONArray("ignored")?.let { a -> for (i in 0 until a.length()) ignored.add(a.optString(i)) }
@@ -51,7 +55,18 @@ object Daily {
             }
         }
 
-        val start = today.withDayOfMonth(1)
+        // Carry-over counts from the first logged purchase (same as src/daily.rs).
+        var firstLogged: LocalDate = today
+        if (pf0(dir).exists()) {
+            for (line in pf0(dir).readLines()) {
+                val f = line.split('\t')
+                if (f.size < 7 || f[0] == "id") continue
+                val dd = try { LocalDate.parse(f[2]) } catch (e: Exception) { continue }
+                if (dd.isBefore(firstLogged)) firstLogged = dd
+            }
+        }
+        val monthFirst = today.withDayOfMonth(1)
+        val start = if (firstLogged.isAfter(monthFirst)) firstLogged else monthFirst
         var before = 0.0
         var now = 0.0
         val seen = HashSet<String>()
@@ -68,15 +83,26 @@ object Daily {
                 val amount = f[5].toDoubleOrNull() ?: continue
                 if (date.isBefore(start) || date.isAfter(today)) continue
                 if (f[0] in ignored) continue
+                if (cutoff > 0.0 && abs(amount) >= cutoff) continue
                 val m = f[6].uppercase(Locale.US)
                 if (bills.any { words -> words.all { m.contains(it) } }) continue
                 if (date == today) now += amount else before += amount
             }
         }
-        val daysLeft = YearMonth.from(today).lengthOfMonth() - today.dayOfMonth + 1
-        val max = ((monthMoney - before) / daysLeft).coerceAtLeast(0.0)
+        val end = YearMonth.from(today).atEndOfMonth()
+        val daysLeft = end.dayOfMonth - today.dayOfMonth + 1
+        // Same as src/daily.rs: carry-over is shared by each remaining day's plan.
+        var plannedBefore = 0.0
+        var d = start
+        while (d.isBefore(today)) { plannedBefore += planFor(d); d = d.plusDays(1) }
+        var plannedRest = 0.0
+        d = today
+        while (!d.isAfter(end)) { plannedRest += planFor(d); d = d.plusDays(1) }
+        val max = if (plannedRest > 0.0) (planFor(today) * (plannedRest - (before - plannedBefore)) / plannedRest).coerceAtLeast(0.0) else 0.0
         return DayStatus(true, monthMoney, before, now, daysLeft, max, max - now, notify)
     }
+
+    private fun pf0(dir: File) = File(dir, Purchases.FILE)
 
     fun money(v: Double): String {
         val s = String.format(Locale.US, "%,.2f", abs(v))

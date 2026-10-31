@@ -103,6 +103,8 @@ pub fn apply(ctx: &egui::Context) {
     ctx.set_visuals(v);
 
     ctx.style_mut(|s| {
+        // Labels don't grab taps, so whole cards (meals, recipes, purchases) are tappable.
+        s.interaction.selectable_labels = false;
         s.spacing.item_spacing = egui::vec2(8.0, 8.0);
         s.spacing.button_padding = egui::vec2(12.0, 6.0);
         s.spacing.interact_size.y = 30.0;

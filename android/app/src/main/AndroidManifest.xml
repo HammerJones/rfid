@@ -28,6 +28,15 @@
             </intent-filter>
         </activity>
 
+        <!-- Opens a recipe from the meal notification, then hands off to the app. -->
+        <activity
+            android:name=".OpenRecipeActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <!-- Logs purchases from Google Wallet / PayPal notifications. -->
         <service
             android:name=".PurchaseListener"

@@ -113,7 +113,65 @@ pub fn counts(b: &Budget, p: &Purchase) -> bool {
     if b.daily.ignored.iter().any(|i| i == &p.id) {
         return false;
     }
-    !is_bill(b, &p.merchant)
+    !is_big(b, p.amount) && !is_bill(b, &p.merchant)
+}
+
+/// Big purchases (groceries, gas) are left out of the daily budget.
+pub fn is_big(b: &Budget, amount: f64) -> bool {
+    b.daily.small_cutoff > 0.0 && amount.abs() >= b.daily.small_cutoff
+}
+
+/// The planned daily budget for one day, before any carry-over.
+pub fn plan_for(b: &Budget, d: NaiveDate) -> f64 {
+    let s = &b.daily;
+    if s.uses_schedule() {
+        if s.is_work_day(d) { s.work_day_budget } else { s.off_day_budget }
+    } else {
+        let start = month_start(d.year(), d.month());
+        let days = (month_end(start) - start).num_days() as f64 + 1.0;
+        b.spending_money(d) / days
+    }
+}
+
+/// Total of the daily plan for d's month.
+pub fn month_plan(b: &Budget, d: NaiveDate) -> f64 {
+    let start = month_start(d.year(), d.month());
+    let end = month_end(start);
+    start.iter_days().take_while(|x| *x <= end).map(|x| plan_for(b, x)).sum()
+}
+
+/// Average small-purchase spending per work day and per off day in a bank statement.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DayAverages {
+    pub work_avg: f64,
+    pub off_avg: f64,
+    pub work_days: u32,
+    pub off_days: u32,
+    pub from: Option<NaiveDate>,
+    pub to: Option<NaiveDate>,
+}
+
+pub fn day_averages(b: &Budget, txns: &[crate::bank::Txn]) -> DayAverages {
+    let spend: Vec<&crate::bank::Txn> = txns.iter().filter(|t| t.is_spending()).collect();
+    let (Some(from), Some(to)) = (spend.iter().map(|t| t.date).min(), spend.iter().map(|t| t.date).max()) else {
+        return DayAverages::default();
+    };
+    // Regular bills (subscriptions) aren't day-to-day spending.
+    let recurring: Vec<String> = crate::bank::detect_recurring(txns).into_iter().map(|r| r.key).collect();
+    let mut a = DayAverages { from: Some(from), to: Some(to), ..Default::default() };
+    for d in from.iter_days().take_while(|d| *d <= to) {
+        if b.daily.is_work_day(d) { a.work_days += 1 } else { a.off_days += 1 }
+    }
+    let (mut w, mut o) = (0.0, 0.0);
+    for t in spend {
+        if is_big(b, t.spent) || is_bill(b, &t.description) || recurring.contains(&merchant_key(&t.description)) {
+            continue;
+        }
+        if b.daily.is_work_day(t.date) { w += t.spent } else { o += t.spent }
+    }
+    a.work_avg = if a.work_days > 0 { w / a.work_days as f64 } else { 0.0 };
+    a.off_avg = if a.off_days > 0 { o / a.off_days as f64 } else { 0.0 };
+    a
 }
 
 /// Is this merchant paid as a bill that's already in the budget?
@@ -139,6 +197,9 @@ pub struct DayStatus {
     /// What you can spend today: (month money − spent before today) ÷ days left, including today.
     pub today_max: f64,
     pub left_today: f64,
+    /// Today's planned amount before carry-over.
+    pub today_plan: f64,
+    pub work_day: bool,
 }
 
 impl DayStatus {
@@ -165,9 +226,13 @@ impl DayStatus {
 }
 
 pub fn status(b: &Budget, purchases: &[Purchase], today: NaiveDate) -> DayStatus {
-    let start = month_start(today.year(), today.month());
-    let end = month_end(start);
-    let month_money = b.spending_money(today);
+    let month_first = month_start(today.year(), today.month());
+    let end = month_end(month_first);
+    let month_money = month_plan(b, today);
+    // Carry-over only counts from when tracking started (the first logged purchase), so starting
+    // mid-month doesn't hand you the whole month's unspent money at once.
+    let tracked_from = purchases.iter().map(|p| p.date).min().unwrap_or(today).min(today);
+    let start = month_first.max(tracked_from);
     let mut before = 0.0;
     let mut now = 0.0;
     for p in purchases.iter().filter(|p| p.date >= start && p.date <= today && counts(b, p)) {
@@ -178,7 +243,16 @@ pub fn status(b: &Budget, purchases: &[Purchase], today: NaiveDate) -> DayStatus
         }
     }
     let days_left = (end - today).num_days() as u32 + 1;
-    let today_max = ((month_money - before) / days_left as f64).max(0.0);
+    // Over- or under-spending so far this month is shared across the rest of the month,
+    // in proportion to each day's plan (work days get more than off days).
+    let planned_before: f64 = start.iter_days().take_while(|d| *d < today).map(|d| plan_for(b, d)).sum();
+    let planned_rest: f64 = today.iter_days().take_while(|d| *d <= end).map(|d| plan_for(b, d)).sum();
+    let today_plan = plan_for(b, today);
+    let today_max = if planned_rest > 0.0 {
+        (today_plan * (planned_rest - (before - planned_before)) / planned_rest).max(0.0)
+    } else {
+        0.0
+    };
     DayStatus {
         month_money,
         spent_before_today: before,
@@ -186,6 +260,8 @@ pub fn status(b: &Budget, purchases: &[Purchase], today: NaiveDate) -> DayStatus
         days_left,
         today_max,
         left_today: today_max - now,
+        today_plan,
+        work_day: b.daily.is_work_day(today),
     }
 }
 
@@ -197,13 +273,23 @@ fn json_str(s: &str) -> String {
 pub fn widget_json(b: &Budget, today: NaiveDate) -> String {
     let ignored: Vec<String> = b.daily.ignored.iter().map(|s| json_str(s)).collect();
     let bills: Vec<String> = b.daily.bill_merchants.iter().map(|s| json_str(s)).collect();
+    // The plan for this month and next, so the widget keeps working into next month.
+    let start = month_start(today.year(), today.month());
+    let end = month_end(crate::model::add_months(start, 1));
+    let plan: Vec<String> = start
+        .iter_days()
+        .take_while(|d| *d <= end)
+        .map(|d| format!("\"{}\":{:.2}", d.format("%Y-%m-%d"), plan_for(b, d)))
+        .collect();
     format!(
-        "{{\"month\":\"{}\",\"month_money\":{:.2},\"hide_notification\":{},\"ignored\":[{}],\"bill_merchants\":[{}]}}\n",
+        "{{\"month\":\"{}\",\"month_money\":{:.2},\"hide_notification\":{},\"cutoff\":{:.2},\"ignored\":[{}],\"bill_merchants\":[{}],\"plan\":{{{}}}}}\n",
         today.format("%Y-%m"),
-        b.spending_money(today),
+        month_plan(b, today),
         b.daily.hide_notification,
+        b.daily.small_cutoff,
         ignored.join(","),
-        bills.join(",")
+        bills.join(","),
+        plan.join(",")
     )
 }
 
@@ -245,9 +331,9 @@ mod tests {
     }
 
     const LOG: &str = "id\tms\tdate\ttime\tsource\tamount\tmerchant
-a\t0\t2026-11-01\t09:00\tcom.google.android.apps.walletnfcrel\t30.00\tKing Soopers
+a\t0\t2026-11-01\t09:00\tcom.google.android.apps.walletnfcrel\t12.00\tKing Soopers
 b\t0\t2026-11-01\t12:00\tcom.paypal.android.p2pmobile\t500.00\tYSI*COLORADO STATION
-a\t0\t2026-11-01\t09:00\tcom.google.android.apps.walletnfcrel\t30.00\tKing Soopers
+a\t0\t2026-11-01\t09:00\tcom.google.android.apps.walletnfcrel\t12.00\tKing Soopers
 c\t0\t2026-11-02\t08:00\tmanual\t10.00\tCoffee
 bad line
 ";
@@ -267,13 +353,35 @@ bad line
         // November: 1500 spending money, 30 days.
         let s = status(&b, &p, d(2026, 11, 2));
         assert_eq!(s.month_money, 1500.0);
-        assert_eq!(s.spent_before_today, 30.0); // rent counted as a bill, not spending
+        assert_eq!(s.spent_before_today, 12.0); // rent counted as a bill, not spending
         assert_eq!(s.days_left, 29);
-        assert!((s.today_max - 1470.0 / 29.0).abs() < 1e-9);
-        assert!((s.left_today - (1470.0 / 29.0 - 10.0)).abs() < 1e-9);
+        assert!((s.today_max - 1488.0 / 29.0).abs() < 1e-9);
+        assert!((s.left_today - (1488.0 / 29.0 - 10.0)).abs() < 1e-9);
 
         b.daily.ignored.push("c".into());
         assert_eq!(status(&b, &p, d(2026, 11, 2)).spent_today, 0.0);
+    }
+
+    #[test]
+    fn big_purchases_and_schedule() {
+        let mut b = budget();
+        b.daily.bill_merchants.push(bill_key("YSI*COLORADO STATION"));
+        // Nov 2026: 1st is a Sunday. Work Fri/Sat/Sun at $40, off days $10.
+        b.daily.work_day_budget = 40.0;
+        b.daily.off_day_budget = 10.0;
+        let log = "x\t0\t2026-11-01\t09:00\tmanual\t85.00\tCostco\ny\t0\t2026-11-01\t10:00\tmanual\t50.00\tLunch?\nz\t0\t2026-11-01\t11:00\tmanual\t25.00\tCoffee and food\n";
+        let p = parse_purchases(log);
+        // Costco ($85) and $50 are big purchases; only the $25 counts.
+        let sun = status(&b, &p, d(2026, 11, 1));
+        assert!(sun.work_day);
+        assert_eq!(sun.spent_today, 25.0);
+        assert!((sun.today_max - 40.0).abs() < 1e-9);
+        // Monday: spent 15 less than planned on Sunday, so the extra is shared out by plan weight.
+        let mon = status(&b, &p, d(2026, 11, 2));
+        assert!(!mon.work_day);
+        let rest: f64 = d(2026, 11, 2).iter_days().take_while(|x| *x <= d(2026, 11, 30)).map(|x| plan_for(&b, x)).sum();
+        assert!((mon.today_max - 10.0 * (rest + 15.0) / rest).abs() < 1e-9);
+        assert_eq!(month_plan(&b, d(2026, 11, 2)), 13.0 * 40.0 + 17.0 * 10.0);
     }
 
     #[test]
@@ -284,6 +392,8 @@ bad line
         assert_eq!(v["month"], "2026-11");
         assert_eq!(v["month_money"], 1500.0);
         assert_eq!(v["hide_notification"], false);
+        assert_eq!(v["cutoff"], 30.0);
+        assert_eq!(v["plan"]["2026-11-02"], 50.0);
     }
 
     #[test]

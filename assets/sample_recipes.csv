@@ -1,0 +1,56 @@
+recipe,servings,type,item,quantity,unit,cost
+Chicken Teriyaki & Veggies,4,ingredient,boneless chicken thighs,1.5,lb,5.25
+Chicken Teriyaki & Veggies,4,ingredient,white rice,1.5,cup,0.75
+Chicken Teriyaki & Veggies,4,ingredient,broccoli,1,head,1.99
+Chicken Teriyaki & Veggies,4,ingredient,bell pepper,1,,1.00
+Chicken Teriyaki & Veggies,4,ingredient,carrots,2,,0.40
+Chicken Teriyaki & Veggies,4,ingredient,soy sauce,0.33,cup,0.60
+Chicken Teriyaki & Veggies,4,ingredient,brown sugar,3,tbsp,0.20
+Chicken Teriyaki & Veggies,4,ingredient,honey,1,tbsp,0.25
+Chicken Teriyaki & Veggies,4,ingredient,garlic,3,clove,0.30
+Chicken Teriyaki & Veggies,4,ingredient,ground ginger,1,tsp,0.15
+Chicken Teriyaki & Veggies,4,ingredient,cornstarch,1,tbsp,0.05
+Chicken Teriyaki & Veggies,4,ingredient,vegetable oil,2,tbsp,0.15
+Chicken Teriyaki & Veggies,4,step,"Rinse the rice and start it cooking (1½ cups rice to 2¼ cups water, simmer covered 18 minutes, then rest 5)."
+Chicken Teriyaki & Veggies,4,step,"Sauce: whisk the soy sauce, brown sugar, honey, minced garlic, ginger and ¼ cup water. In a small cup, mix the cornstarch with 1 tbsp cold water."
+Chicken Teriyaki & Veggies,4,step,"Cut the chicken into bite-size pieces. Cut the broccoli into florets, the pepper into strips and the carrots into thin coins."
+Chicken Teriyaki & Veggies,4,step,"Heat 1 tbsp oil in a large pan over medium-high. Cook the chicken 6–7 minutes, stirring, until browned and cooked through (165°F). Move it to a plate."
+Chicken Teriyaki & Veggies,4,step,"Add the rest of the oil, then the carrots for 2 minutes, then the broccoli and pepper with a splash of water for 3–4 more minutes until crisp-tender."
+Chicken Teriyaki & Veggies,4,step,"Return the chicken, pour in the sauce and bring to a simmer. Stir in the cornstarch mix and cook 1 minute until glossy and thick."
+Chicken Teriyaki & Veggies,4,step,Serve over the rice.
+Chicken Teriyaki & Veggies,4,note,Leftovers pack well for work-day lunches. Keeps 3–4 days in the fridge.
+Spaghetti Marinara & Garlic Bread,4,ingredient,spaghetti,1,lb,1.50
+Spaghetti Marinara & Garlic Bread,4,ingredient,crushed tomatoes,1,can,2.00
+Spaghetti Marinara & Garlic Bread,4,ingredient,yellow onion,1,,0.80
+Spaghetti Marinara & Garlic Bread,4,ingredient,garlic,6,clove,0.60
+Spaghetti Marinara & Garlic Bread,4,ingredient,olive oil,3,tbsp,0.45
+Spaghetti Marinara & Garlic Bread,4,ingredient,dried basil,1,tsp,0.10
+Spaghetti Marinara & Garlic Bread,4,ingredient,dried oregano,1,tsp,0.10
+Spaghetti Marinara & Garlic Bread,4,ingredient,red pepper flakes,0.25,tsp,0.05
+Spaghetti Marinara & Garlic Bread,4,ingredient,parmesan,0.5,cup,1.50
+Spaghetti Marinara & Garlic Bread,4,ingredient,french bread,1,loaf,2.50
+Spaghetti Marinara & Garlic Bread,4,ingredient,butter,4,tbsp,0.80
+Spaghetti Marinara & Garlic Bread,4,ingredient,salt,1,tsp,0.02
+Spaghetti Marinara & Garlic Bread,4,step,"Put a big pot of well-salted water on to boil. Heat the oven to 400°F for the bread."
+Spaghetti Marinara & Garlic Bread,4,step,"Dice the onion and mince 4 cloves of garlic. Warm the olive oil in a saucepan over medium and cook the onion 5 minutes until soft, then the garlic for 1 minute."
+Spaghetti Marinara & Garlic Bread,4,step,"Add the crushed tomatoes, basil, oregano, pepper flakes and ½ tsp salt. Simmer uncovered 15–20 minutes, stirring now and then."
+Spaghetti Marinara & Garlic Bread,4,step,"Garlic bread: soften the butter and mix in the last 2 cloves of garlic, minced. Split the loaf lengthwise, spread with the butter and bake 10–12 minutes until golden at the edges."
+Spaghetti Marinara & Garlic Bread,4,step,"Cook the spaghetti 1 minute short of the package time. Save ½ cup pasta water, then drain."
+Spaghetti Marinara & Garlic Bread,4,step,"Toss the spaghetti in the sauce with a splash of pasta water. Serve with parmesan and the garlic bread."
+Spaghetti Marinara & Garlic Bread,4,note,The sauce freezes well. Make a double batch and freeze half for an easy off-day dinner.
+Steak & Fries with Steamed Broccoli,2,ingredient,sirloin steak,1,lb,8.99
+Steak & Fries with Steamed Broccoli,2,ingredient,russet potatoes,2,lb,1.60
+Steak & Fries with Steamed Broccoli,2,ingredient,broccoli,1,head,1.99
+Steak & Fries with Steamed Broccoli,2,ingredient,vegetable oil,3,tbsp,0.25
+Steak & Fries with Steamed Broccoli,2,ingredient,butter,2,tbsp,0.40
+Steak & Fries with Steamed Broccoli,2,ingredient,garlic,2,clove,0.20
+Steak & Fries with Steamed Broccoli,2,ingredient,garlic powder,1,tsp,0.10
+Steak & Fries with Steamed Broccoli,2,ingredient,salt,1,tsp,0.02
+Steak & Fries with Steamed Broccoli,2,ingredient,black pepper,1,tsp,0.05
+Steak & Fries with Steamed Broccoli,2,step,"Take the steak out of the fridge 30 minutes early. Pat it dry and season well with salt and pepper."
+Steak & Fries with Steamed Broccoli,2,step,"Fries: heat the oven to 425°F. Cut the potatoes into ½-inch sticks, soak 10 minutes in cold water, then dry well. Toss with 2 tbsp oil, salt and garlic powder."
+Steak & Fries with Steamed Broccoli,2,step,"Spread the fries in one layer on a sheet pan and bake 30–35 minutes, flipping halfway, until crisp and golden."
+Steak & Fries with Steamed Broccoli,2,step,"With 10 minutes left on the fries, heat 1 tbsp oil in a heavy skillet over high until it just smokes. Sear the steak 3–4 minutes per side for medium-rare (130°F)."
+Steak & Fries with Steamed Broccoli,2,step,"Lower the heat, add the butter and crushed garlic, and spoon the butter over the steak for 30 seconds. Rest it on a board 5–8 minutes."
+Steak & Fries with Steamed Broccoli,2,step,"Steam the broccoli florets over 1 inch of boiling water, covered, 4–5 minutes until bright green and tender. Season with salt."
+Steak & Fries with Steamed Broccoli,2,step,"Slice the steak against the grain and serve with the fries and broccoli."

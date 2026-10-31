@@ -10,18 +10,21 @@ use std::collections::HashMap;
 use chrono::{Datelike, Duration, Local, NaiveDate};
 use eframe::egui::{self, Color32, RichText};
 
+mod food_ui;
+use food_ui::{FoodForms, FoodSection, RecipeEditor, RecipeView};
+
 const SAMPLE_SHEET: &str = include_str!("../tests/sample_sheet.csv");
 
-const TABS: [Tab; 7] = [Tab::Today, Tab::Overview, Tab::Expenses, Tab::Calendar, Tab::Bank, Tab::Settings, Tab::ImportExport];
+const TABS: [Tab; 7] = [Tab::Calendar, Tab::Overview, Tab::Expenses, Tab::Today, Tab::Food, Tab::Settings, Tab::ImportExport];
 
 /// (icon, full label, short label for the phone nav bar)
 fn tab_info(t: Tab) -> (&'static str, &'static str, &'static str) {
     match t {
-        Tab::Today => ("⛽", "Today", "Today"),
+        Tab::Today => ("⛽", "Daily budget", "Daily"),
+        Tab::Food => ("🍽", "Food", "Food"),
         Tab::Overview => ("📊", "Overview", "Month"),
         Tab::Expenses => ("💳", "Expenses", "Bills"),
         Tab::Calendar => ("📅", "Schedule", "Dates"),
-        Tab::Bank => ("🏦", "Bank", "Bank"),
         Tab::Settings => ("⚙", "Settings", "Settings"),
         Tab::ImportExport => ("📂", "Import / Export", "Files"),
     }
@@ -33,7 +36,7 @@ enum Tab {
     Overview,
     Expenses,
     Calendar,
-    Bank,
+    Food,
     Settings,
     ImportExport,
 }
@@ -163,6 +166,12 @@ pub struct BudgetApp {
     show_all_purchases: bool,
     /// Last widget.json written, so it's only rewritten when something changes.
     widget_written: String,
+    meals_written: String,
+    food_section: FoodSection,
+    food_forms: FoodForms,
+    recipe_view: Option<RecipeView>,
+    recipe_edit: Option<RecipeEditor>,
+    open_check_at: f64,
 }
 
 fn today() -> NaiveDate {
@@ -199,6 +208,15 @@ impl BudgetApp {
                 )),
             ),
         };
+        let mut budget = budget;
+        if !budget.food.samples_added && budget.food.recipes.is_empty() {
+            if let Ok(list) = crate::food::parse_recipes(crate::food::SAMPLE_RECIPES) {
+                for r in list {
+                    budget.food.upsert_recipe(r);
+                }
+            }
+            budget.food.samples_added = true;
+        }
         BudgetApp {
             budget,
             tab: Tab::Today,
@@ -227,6 +245,12 @@ impl BudgetApp {
             add_merchant: String::new(),
             show_all_purchases: false,
             widget_written: String::new(),
+            meals_written: String::new(),
+            food_section: FoodSection::Plan,
+            food_forms: FoodForms::default(),
+            recipe_view: None,
+            recipe_edit: None,
+            open_check_at: -10.0,
         }
     }
 
@@ -335,7 +359,8 @@ impl BudgetApp {
 
         theme::tinted_card(color).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(theme::muted(day.format("%A, %B %-d").to_string()));
+            let kind = if !self.budget.daily.uses_schedule() { "" } else if st.work_day { "  ·  💼 Work day" } else { "  ·  🏠 Off day" };
+            ui.label(theme::muted(format!("{}{}", day.format("%A, %B %-d"), kind)));
             ui.horizontal(|ui| {
                 let w = (ui.available_width() * 0.45).clamp(130.0, 220.0);
                 fuel_dial(ui, fuel, color, w);
@@ -421,7 +446,10 @@ impl BudgetApp {
                 "Nothing logged yet. Purchases show up here when Google Wallet or PayPal notifies you, or when you add one above.",
             ));
         }
-        ui.label(theme::muted("🏠 = a bill already in your budget (rent, subscriptions). 🚫 = don't count it.").size(12.0));
+        ui.label(theme::muted(format!(
+            "🏠 = a bill already in your budget (rent, subscriptions). 🚫 = don't count it. Purchases of {} or more are big purchases and aren't counted.",
+            money(self.budget.daily.small_cutoff)
+        )).size(12.0));
         let shown = if self.show_all_purchases { list.len() } else { list.len().min(25) };
         let mut toggle_bill: Option<String> = None;
         let mut toggle_ignore: Option<String> = None;
@@ -436,7 +464,8 @@ impl BudgetApp {
             }
             let bill = daily::is_bill(&self.budget, &p.merchant);
             let ignored = self.budget.daily.ignored.contains(&p.id);
-            let counted = !bill && !ignored;
+            let big = daily::is_big(&self.budget, p.amount);
+            let counted = !bill && !ignored && !big;
             theme::card().inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 ui.horizontal(|ui| {
@@ -473,7 +502,7 @@ impl BudgetApp {
                                 title = title.strikethrough().color(theme::MUTED);
                             }
                             ui.add(egui::Label::new(title).truncate());
-                            let note = if bill { " · bill" } else if ignored { " · not counted" } else { "" };
+                            let note = if bill { " · bill" } else if ignored { " · not counted" } else if big { " · big purchase" } else { "" };
                             ui.add(egui::Label::new(theme::muted(format!("{} · {}{}", p.time, p.source_label(), note)).size(12.0)).truncate());
                         });
                     });
@@ -516,13 +545,6 @@ impl BudgetApp {
         theme::card().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             let auto = (self.budget.settings.monthly_income() - self.budget.settings.monthly_savings() - self.budget.monthly_bills(day)).max(0.0);
-            ui.label(theme::muted(format!(
-                "Worked out from your budget: {} income − {} savings − {} bills = {} a month.",
-                money(self.budget.settings.monthly_income()),
-                money(self.budget.settings.monthly_savings()),
-                money(self.budget.monthly_bills(day)),
-                money(auto)
-            )));
             let mut show = !self.budget.daily.hide_notification;
             if ui.checkbox(&mut show, "Show today's budget in my notification bar").changed() {
                 self.budget.daily.hide_notification = !show;
@@ -537,24 +559,152 @@ impl BudgetApp {
                     }
                 });
             }
+            ui.separator();
+
+            // Big-purchase cutoff.
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Leave out purchases of");
+                if ui
+                    .add(egui::DragValue::new(&mut self.budget.daily.small_cutoff).prefix("$").speed(1.0).range(0.0..=1000.0).fixed_decimals(0))
+                    .changed()
+                {
+                    self.dirty = true;
+                }
+                ui.label("or more");
+            });
+            ui.label(theme::muted("Groceries, gas and other big buys don't count against the daily amount. 0 = count everything.").size(12.5));
+            ui.separator();
+
+            // Weekly schedule.
+            ui.label(RichText::new("📅  My work days").strong());
+            ui.horizontal_wrapped(|ui| {
+                for (i, name) in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].iter().enumerate() {
+                    let on = self.budget.daily.work_days.contains(&(i as u8));
+                    let text = if on { RichText::new(*name).strong().color(theme::BG) } else { RichText::new(*name) };
+                    let mut btn = egui::Button::new(text).min_size(egui::vec2(40.0, 30.0));
+                    if on {
+                        btn = btn.fill(theme::VIOLET);
+                    }
+                    if ui.add(btn).clicked() {
+                        if on {
+                            self.budget.daily.work_days.retain(|d| *d != i as u8);
+                        } else {
+                            self.budget.daily.work_days.push(i as u8);
+                            self.budget.daily.work_days.sort();
+                        }
+                        self.dirty = true;
+                    }
+                }
+            });
             ui.add_space(4.0);
-            let mut custom = self.budget.daily.monthly_override > 0.0;
-            if ui.checkbox(&mut custom, "Use my own monthly amount").changed() {
-                self.budget.daily.monthly_override = if custom { auto.max(1.0).round() } else { 0.0 };
+            let mut sched = self.budget.daily.uses_schedule();
+            if ui.checkbox(&mut sched, "Separate work-day and off-day budgets").changed() {
+                if sched {
+                    let (w, o) = self.suggested_day_budgets();
+                    let even = (auto / 30.0).max(1.0).round();
+                    self.budget.daily.work_day_budget = if w > 0.0 { w } else { even };
+                    self.budget.daily.off_day_budget = if o > 0.0 { o } else { even };
+                } else {
+                    self.budget.daily.work_day_budget = 0.0;
+                    self.budget.daily.off_day_budget = 0.0;
+                }
                 self.dirty = true;
             }
-            if custom {
-                ui.horizontal(|ui| {
-                    ui.label("Spending money per month: $");
+            if sched {
+                egui::Grid::new("day_budgets").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                    ui.label("💼 Work day");
                     if ui
-                        .add(egui::DragValue::new(&mut self.budget.daily.monthly_override).speed(5.0).range(1.0..=1_000_000.0).fixed_decimals(0))
+                        .add(egui::DragValue::new(&mut self.budget.daily.work_day_budget).prefix("$").speed(0.5).range(0.0..=10_000.0).fixed_decimals(0))
                         .changed()
                     {
                         self.dirty = true;
                     }
+                    ui.end_row();
+                    ui.label("🏠 Off day");
+                    if ui
+                        .add(egui::DragValue::new(&mut self.budget.daily.off_day_budget).prefix("$").speed(0.5).range(0.0..=10_000.0).fixed_decimals(0))
+                        .changed()
+                    {
+                        self.dirty = true;
+                    }
+                    ui.end_row();
                 });
+                let plan = daily::month_plan(&self.budget, day);
+                let color = if plan > auto + 0.5 { theme::AMBER } else { theme::GOOD };
+                ui.label(RichText::new(format!("This month's plan adds up to {}. Your budget leaves {} for spending.", money(plan), money(auto))).color(color).size(13.0));
+                if plan > auto + 0.5 {
+                    ui.label(theme::muted("That's more than your budget leaves. Lower one of the amounts or your bills.").size(12.5));
+                }
+            }
+
+            // Suggestion from bank statements.
+            ui.add_space(6.0);
+            let d = self.budget.daily.clone();
+            if d.hist_work_avg > 0.0 || d.hist_off_avg > 0.0 {
+                theme::tinted_card(theme::SKY).show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    ui.label(RichText::new("📈  From your statement").strong().color(theme::SKY));
+                    ui.label(theme::muted(format!(
+                        "Small purchases (under {}), {}: you averaged {} per work day and {} per off day.",
+                        money(d.small_cutoff),
+                        d.hist_note,
+                        money(d.hist_work_avg),
+                        money(d.hist_off_avg)
+                    )));
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Cut off-day spending by");
+                        let mut pct = (self.budget.daily.off_day_cut * 100.0).round();
+                        if ui.add(egui::Slider::new(&mut pct, 0.0..=90.0).step_by(5.0).suffix("%")).changed() {
+                            self.budget.daily.off_day_cut = pct / 100.0;
+                            self.dirty = true;
+                        }
+                    });
+                    let (w, o) = self.suggested_day_budgets();
+                    ui.label(format!("Suggested: {} per work day, {} per off day.", money(w), money(o)));
+                    if theme::primary_button(ui, "Use these amounts").clicked() {
+                        self.budget.daily.work_day_budget = w;
+                        self.budget.daily.off_day_budget = o.max(1.0);
+                        self.dirty = true;
+                    }
+                });
+            } else {
+                ui.label(theme::muted("Import a bank or PayPal statement (Files tab) and I'll suggest work-day and off-day amounts from what you actually spend.").size(12.5));
+            }
+            ui.separator();
+
+            // Monthly total override (used when there's no weekly schedule).
+            ui.label(theme::muted(format!(
+                "Your budget leaves {} income − {} savings − {} bills = {} a month for spending.",
+                money(self.budget.settings.monthly_income()),
+                money(self.budget.settings.monthly_savings()),
+                money(self.budget.monthly_bills(day)),
+                money(auto)
+            )).size(12.5));
+            if !self.budget.daily.uses_schedule() {
+                let mut custom = self.budget.daily.monthly_override > 0.0;
+                if ui.checkbox(&mut custom, "Use my own monthly amount").changed() {
+                    self.budget.daily.monthly_override = if custom { auto.max(1.0).round() } else { 0.0 };
+                    self.dirty = true;
+                }
+                if custom {
+                    ui.horizontal(|ui| {
+                        ui.label("Spending money per month: $");
+                        if ui
+                            .add(egui::DragValue::new(&mut self.budget.daily.monthly_override).speed(5.0).range(1.0..=1_000_000.0).fixed_decimals(0))
+                            .changed()
+                        {
+                            self.dirty = true;
+                        }
+                    });
+                }
             }
         });
+    }
+
+    /// Work-day and off-day amounts suggested from the last statement, rounded to whole dollars.
+    fn suggested_day_budgets(&self) -> (f64, f64) {
+        let d = &self.budget.daily;
+        (d.hist_work_avg.round(), (d.hist_off_avg * (1.0 - d.off_day_cut)).round())
     }
 
     // ---------------------------------------------------------------- Overview
@@ -787,6 +937,7 @@ impl BudgetApp {
             let mut day = start;
             while day <= end {
                 let todays: Vec<&(NaiveDate, &Expense)> = due.iter().filter(|(d, _)| *d == day).collect();
+                let meal_count = self.budget.food.plan.iter().filter(|m| m.date == day).count();
                 let selected = self.selected_day == Some(day);
                 let is_today = day == today();
                 let busy = !todays.is_empty();
@@ -806,7 +957,13 @@ impl BudgetApp {
                         ui.set_max_width(cell_w - 10.0);
                         ui.vertical(|ui| {
                             let num = RichText::new(day.day().to_string()).strong();
-                            ui.label(if is_today { num.color(theme::ACCENT) } else { num });
+                            ui.horizontal(|ui| {
+                                ui.label(if is_today { num.color(theme::ACCENT) } else { num });
+                                if meal_count > 0 {
+                                    let t = if compact { "🍽".to_string() } else { format!("🍽{meal_count}") };
+                                    ui.label(RichText::new(t).size(11.0).color(theme::GOOD));
+                                }
+                            });
                             if busy {
                                 if compact {
                                     // One colored dot per payment (up to 4), then the day's total.
@@ -864,6 +1021,7 @@ impl BudgetApp {
                         edit = Some(*id);
                     }
                 }
+                self.day_meals(ui, sel);
             });
         }
 
@@ -893,7 +1051,6 @@ impl BudgetApp {
 
     // ---------------------------------------------------------------- Bank statements
     fn bank_tab(&mut self, ui: &mut egui::Ui) {
-        self.file_access_banner(ui);
         theme::section_title(ui, "🏦", "Bank & card statements");
         ui.label(
             "Import CSV statements from your bank or card (download them from the bank's website). \
@@ -1110,6 +1267,20 @@ impl BudgetApp {
                         (r, new)
                     })
                     .collect();
+                // Work-day / off-day averages for the daily budget suggestion.
+                let avg = daily::day_averages(&self.budget, &self.bank_txns);
+                if avg.work_days + avg.off_days >= 7 {
+                    self.budget.daily.hist_work_avg = avg.work_avg;
+                    self.budget.daily.hist_off_avg = avg.off_avg;
+                    self.budget.daily.hist_note = format!(
+                        "{} to {} ({} work days, {} off days)",
+                        avg.from.map(|d| d.format("%b %-d").to_string()).unwrap_or_default(),
+                        avg.to.map(|d| d.format("%b %-d, %Y").to_string()).unwrap_or_default(),
+                        avg.work_days,
+                        avg.off_days
+                    );
+                    self.dirty = true;
+                }
                 self.info(format!("Read {n} transactions from {name}."));
             }
             Err(e) => self.error(format!("{name}: {e}")),
@@ -1377,6 +1548,9 @@ impl BudgetApp {
             }
         });
         ui.label(RichText::new("The monthly summary uses the Monthly Costs spreadsheet layout, with totals added at the bottom.").weak());
+        ui.add_space(10.0);
+        ui.separator();
+        self.bank_tab(ui);
     }
 
     fn preview_import(&mut self, text: &str) {
@@ -1617,6 +1791,7 @@ const PERMISSION_HELP: &str = "If files don't show up, turn on All files access 
 enum PickFor {
     Budget,
     Statement,
+    Food,
 }
 
 /// A simple built-in file browser. Android has no native file dialog from Rust,
@@ -1712,6 +1887,7 @@ impl BudgetApp {
         let title = match picker.purpose {
             PickFor::Budget => "Choose a budget CSV",
             PickFor::Statement => "Choose a bank statement",
+            PickFor::Food => "Choose a recipes or meal plan CSV",
         };
         egui::Window::new(title)
             .open(&mut open)
@@ -1777,6 +1953,7 @@ impl BudgetApp {
                 Ok(text) => match picker.purpose {
                     PickFor::Budget => self.preview_import(&text),
                     PickFor::Statement => self.add_statement(&name, &text),
+                    PickFor::Food => self.import_food_csv(&name, &text),
                 },
                 Err(e) => self.error(format!("Couldn't read {name}: {e}. {PERMISSION_HELP}")),
             }
@@ -2076,13 +2253,15 @@ impl eframe::App for BudgetApp {
                 Tab::Overview => self.overview(ui),
                 Tab::Expenses => self.expenses(ui),
                 Tab::Calendar => self.calendar(ui),
-                Tab::Bank => self.bank_tab(ui),
+                Tab::Food => self.food_tab(ui),
                 Tab::Settings => self.settings(ui),
                 Tab::ImportExport => self.import_export(ui),
             });
         });
 
         self.editor_window(ctx);
+        self.recipe_window(ctx);
+        self.recipe_editor_window(ctx);
         self.delete_dialog(ctx);
         self.picker_window(ctx);
 
@@ -2093,6 +2272,18 @@ impl eframe::App for BudgetApp {
             }
         }
         self.update_widget_file();
+        if self.update_meals_file() {
+            #[cfg(target_os = "android")]
+            crate::android_perm::refresh_widget();
+        }
+        // A tap on a meal in the notification asks for its recipe.
+        let now = ctx.input(|i| i.time);
+        if now - self.open_check_at > 1.0 {
+            self.open_check_at = now;
+            self.check_open_recipe_request();
+        }
+        #[cfg(target_os = "android")]
+        ctx.request_repaint_after(std::time::Duration::from_secs(2));
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

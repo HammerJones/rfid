@@ -6,6 +6,7 @@ pub mod app;
 pub mod bank;
 pub mod csvio;
 pub mod daily;
+pub mod food;
 pub mod model;
 pub mod storage;
 pub mod theme;

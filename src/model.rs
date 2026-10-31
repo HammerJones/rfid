@@ -235,10 +235,13 @@ pub struct Budget {
     /// Daily spending budget settings.
     #[serde(default)]
     pub daily: DailySettings,
+    /// Recipes, meal plan, groceries and kitchen inventory.
+    #[serde(default)]
+    pub food: crate::food::Food,
 }
 
 /// Settings for the daily spending budget and auto-tracked purchases.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct DailySettings {
     /// Monthly spending money to spread across the days. 0 = work it out from the budget.
     #[serde(default)]
@@ -252,6 +255,66 @@ pub struct DailySettings {
     /// Turn off the always-on daily budget notification (Android).
     #[serde(default)]
     pub hide_notification: bool,
+    /// Weekly schedule: days you work (0 = Monday … 6 = Sunday).
+    #[serde(default = "default_work_days")]
+    pub work_days: Vec<u8>,
+    /// Daily budget on work days and off days. Both 0 = spread the month's money evenly.
+    #[serde(default)]
+    pub work_day_budget: f64,
+    #[serde(default)]
+    pub off_day_budget: f64,
+    /// Purchases at or above this are big purchases (groceries, gas) and don't count against the daily budget.
+    #[serde(default = "default_cutoff")]
+    pub small_cutoff: f64,
+    /// How much to cut off-day spending when suggesting amounts (0.5 = half).
+    #[serde(default = "default_cut")]
+    pub off_day_cut: f64,
+    /// Averages found in the last bank statement (small purchases only).
+    #[serde(default)]
+    pub hist_work_avg: f64,
+    #[serde(default)]
+    pub hist_off_avg: f64,
+    #[serde(default)]
+    pub hist_note: String,
+}
+
+fn default_work_days() -> Vec<u8> {
+    vec![4, 5, 6] // Fri, Sat, Sun
+}
+fn default_cutoff() -> f64 {
+    30.0
+}
+fn default_cut() -> f64 {
+    0.5
+}
+
+impl Default for DailySettings {
+    fn default() -> Self {
+        DailySettings {
+            monthly_override: 0.0,
+            ignored: vec![],
+            bill_merchants: vec![],
+            hide_notification: false,
+            work_days: default_work_days(),
+            work_day_budget: 0.0,
+            off_day_budget: 0.0,
+            small_cutoff: default_cutoff(),
+            off_day_cut: default_cut(),
+            hist_work_avg: 0.0,
+            hist_off_avg: 0.0,
+            hist_note: String::new(),
+        }
+    }
+}
+
+impl DailySettings {
+    pub fn is_work_day(&self, d: NaiveDate) -> bool {
+        self.work_days.contains(&(d.weekday().num_days_from_monday() as u8))
+    }
+    /// True when work-day / off-day amounts are set.
+    pub fn uses_schedule(&self) -> bool {
+        self.work_day_budget > 0.0 || self.off_day_budget > 0.0
+    }
 }
 
 impl Default for Budget {
@@ -262,6 +325,7 @@ impl Default for Budget {
             expenses: vec![],
             next_id: 1,
             daily: DailySettings::default(),
+            food: Default::default(),
         }
     }
 }
