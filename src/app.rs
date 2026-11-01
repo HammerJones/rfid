@@ -1535,6 +1535,9 @@ impl BudgetApp {
         theme::section_title(ui, "📤", "Export");
         self.month_nav(ui);
         ui.horizontal_wrapped(|ui| {
+            if theme::primary_button(ui, "Monthly summary (Excel, colored)").clicked() {
+                self.export_summary_xlsx(ui.ctx());
+            }
             if ui.button("Monthly summary (CSV)").clicked() {
                 self.export_summary(ui.ctx());
             }
@@ -1547,7 +1550,7 @@ impl BudgetApp {
                 self.save_csv(ui.ctx(), "Budget Import Template.csv", text);
             }
         });
-        ui.label(RichText::new("The monthly summary uses the Monthly Costs spreadsheet layout, with totals added at the bottom.").weak());
+        ui.label(RichText::new("The monthly summary uses the Monthly Costs spreadsheet layout and colors, with totals added at the bottom. Excel files open in Google Sheets and phone spreadsheet apps too.").weak());
         ui.add_space(10.0);
         ui.separator();
         self.bank_tab(ui);
@@ -1588,6 +1591,43 @@ impl BudgetApp {
         let text = csvio::export_summary(&self.budget, &s);
         let name = format!("Budget Summary - {}.csv", self.view_month.format("%Y-%m"));
         self.save_csv(ctx, &name, text);
+    }
+
+    fn export_summary_xlsx(&mut self, ctx: &egui::Context) {
+        let s = self.budget.summarize(self.view_month);
+        match crate::xlsx::export_summary(&self.budget, &s) {
+            Ok(bytes) => {
+                let name = format!("Budget Summary - {}.xlsx", self.view_month.format("%Y-%m"));
+                self.save_bytes(ctx, &name, "Excel", "xlsx", bytes);
+            }
+            Err(e) => self.error(format!("Couldn't build the Excel file: {e}")),
+        }
+    }
+
+    /// Like save_csv, for binary files.
+    fn save_bytes(&mut self, ctx: &egui::Context, name: &str, kind: &str, ext: &str, bytes: Vec<u8>) {
+        let _ = ctx;
+        #[cfg(not(target_os = "android"))]
+        {
+            let dialog = rfd::FileDialog::new()
+                .add_filter(kind, &[ext])
+                .set_file_name(name)
+                .set_directory(storage::export_dir());
+            if let Some(path) = dialog.save_file() {
+                match std::fs::write(&path, &bytes) {
+                    Ok(()) => self.info(format!("Saved {}", path.display())),
+                    Err(e) => self.error(format!("Couldn't save: {e}")),
+                }
+            }
+        }
+        #[cfg(target_os = "android")]
+        {
+            let _ = (kind, ext);
+            match storage::write_export(name, &bytes) {
+                Ok(p) => self.info(format!("Saved to {}", p.display())),
+                Err(e) => self.error(format!("Couldn't save: {e}. {}", PERMISSION_HELP)),
+            }
+        }
     }
 
     /// Desktop: Save dialog. Android: write to the app's export folder and copy to clipboard.

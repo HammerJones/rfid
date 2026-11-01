@@ -97,12 +97,12 @@ pub fn save(budget: &Budget) -> std::io::Result<()> {
     std::fs::rename(&tmp, &path)
 }
 
-pub fn write_export(file_name: &str, contents: &str) -> std::io::Result<PathBuf> {
+pub fn write_export(file_name: &str, contents: impl AsRef<[u8]>) -> std::io::Result<PathBuf> {
     let primary = export_dir();
     let attempt = |dir: &Path| -> std::io::Result<PathBuf> {
         std::fs::create_dir_all(dir)?;
         let path = dir.join(file_name);
-        std::fs::write(&path, contents)?;
+        std::fs::write(&path, contents.as_ref())?;
         Ok(path)
     };
     match attempt(&primary) {

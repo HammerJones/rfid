@@ -10,6 +10,7 @@ pub mod food;
 pub mod model;
 pub mod storage;
 pub mod theme;
+pub mod xlsx;
 
 pub const APP_NAME: &str = "Budget";
 
