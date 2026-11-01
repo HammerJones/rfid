@@ -114,3 +114,91 @@ pub fn write_export(file_name: &str, contents: impl AsRef<[u8]>) -> std::io::Res
         },
     }
 }
+
+// ---------------------------------------------------------------- Backups
+//
+// The app's own data folder is wiped if the app is uninstalled. Backups go to Download/Budget
+// (Android) or the Documents folder (desktop), which survive an uninstall.
+
+pub const AUTO_BACKUP_NAME: &str = "Budget Auto-Backup.json";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct Backup {
+    pub version: u32,
+    pub created: String,
+    pub budget: Budget,
+    /// Logged purchases (purchases.tsv), so the daily budget history comes back too.
+    #[serde(default)]
+    pub purchases: String,
+}
+
+pub fn backup_json(budget: &Budget) -> String {
+    let purchases = std::fs::read_to_string(data_dir().join(crate::daily::PURCHASES_FILE)).unwrap_or_default();
+    let b = Backup {
+        version: 1,
+        created: chrono::Local::now().format("%Y-%m-%d %H:%M").to_string(),
+        budget: budget.clone(),
+        purchases,
+    };
+    serde_json::to_string_pretty(&b).unwrap_or_default()
+}
+
+/// Read a backup file (or a plain budget.json). Returns the budget, logged purchases and when it was made.
+pub fn parse_backup(text: &str) -> Result<(Budget, Option<String>, String), String> {
+    if let Ok(b) = serde_json::from_str::<Backup>(text) {
+        return Ok((b.budget, Some(b.purchases).filter(|p| !p.is_empty()), b.created));
+    }
+    serde_json::from_str::<Budget>(text)
+        .map(|b| (b, None, String::new()))
+        .map_err(|_| "That file isn't a Budget backup.".to_string())
+}
+
+pub fn auto_backup_path() -> PathBuf {
+    export_dir().join(AUTO_BACKUP_NAME)
+}
+
+/// Keep an up-to-date copy outside the app's private folder (Android only; desktop data isn't lost on reinstall).
+pub fn write_auto_backup(budget: &Budget) -> std::io::Result<()> {
+    #[cfg(target_os = "android")]
+    {
+        let dir = export_dir();
+        std::fs::create_dir_all(&dir)?;
+        let tmp = dir.join("Budget Auto-Backup.json.tmp");
+        std::fs::write(&tmp, backup_json(budget))?;
+        std::fs::rename(tmp, auto_backup_path())?;
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = budget;
+    Ok(())
+}
+
+/// Replace the current data with a backup. The data being replaced is kept as budget-before-restore.json.
+pub fn restore(budget: &Budget, purchases: Option<&str>) -> std::io::Result<()> {
+    let dir = data_dir();
+    std::fs::create_dir_all(&dir)?;
+    if let Ok(old) = std::fs::read(budget_path()) {
+        let _ = std::fs::write(dir.join("budget-before-restore.json"), old);
+    }
+    save(budget)?;
+    if let Some(p) = purchases {
+        std::fs::write(dir.join(crate::daily::PURCHASES_FILE), p)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod backup_tests {
+    use super::*;
+
+    #[test]
+    fn backup_round_trip_and_plain_budget() {
+        let mut b = Budget::default();
+        b.settings.hourly_rate = 31.5;
+        let (back, _, created) = parse_backup(&backup_json(&b)).unwrap();
+        assert_eq!(back.settings.hourly_rate, 31.5);
+        assert!(!created.is_empty());
+        let plain = serde_json::to_string(&b).unwrap();
+        assert_eq!(parse_backup(&plain).unwrap().0.settings.hourly_rate, 31.5);
+        assert!(parse_backup("name,amount\nx,1").is_err());
+    }
+}

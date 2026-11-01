@@ -53,7 +53,9 @@ jobs:
           key: budget-signing-key-v1
       - name: Make a signing key (first build only)
         if: steps.key.outputs.cache-hit != 'true'
-        run: keytool -genkeypair -keystore android/budget.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Budget"
+        run: |
+          echo "::warning title=New signing key::This APK is signed with a NEW key, so it won't install over the previous version. Back up in the app (Files > Backup & restore), uninstall, install, then restore."
+          keytool -genkeypair -keystore android/budget.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Budget"
 
       - name: Build the Rust library
         shell: bash

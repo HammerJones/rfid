@@ -172,6 +172,8 @@ pub struct BudgetApp {
     recipe_view: Option<RecipeView>,
     recipe_edit: Option<RecipeEditor>,
     open_check_at: f64,
+    /// A backup waiting for the user to confirm: (file name, (budget, purchases, created)).
+    pending_restore: Option<(String, (Budget, Option<String>, String))>,
 }
 
 fn today() -> NaiveDate {
@@ -199,14 +201,25 @@ fn sample_budget() -> Budget {
 impl BudgetApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         theme::apply(&cc.egui_ctx);
+        let mut pending_restore = None;
         let (budget, status) = match storage::load() {
-            Some(b) => (b, None),
-            None => (
-                sample_budget(),
-                Some(Status::Info(
-                    "Loaded sample data. Import your own spreadsheet from Import / Export, or edit anything here.".into(),
-                )),
-            ),
+            Some(b) => {
+                // Refresh the backup copy on every launch.
+                let _ = storage::write_auto_backup(&b);
+                (b, None)
+            }
+            None => {
+                // Fresh install: a backup in Download/Budget may survive from before.
+                if let Some(Ok(found)) = std::fs::read_to_string(storage::auto_backup_path()).ok().map(|t| storage::parse_backup(&t)) {
+                    pending_restore = Some((storage::AUTO_BACKUP_NAME.to_string(), found));
+                }
+                (
+                    sample_budget(),
+                    Some(Status::Info(
+                        "Loaded sample data. Reinstalled the app? Files > Backup & restore brings your data back. Or import your spreadsheet from Files.".into(),
+                    )),
+                )
+            }
         };
         let mut budget = budget;
         if !budget.food.samples_added && budget.food.recipes.is_empty() {
@@ -251,6 +264,7 @@ impl BudgetApp {
             recipe_view: None,
             recipe_edit: None,
             open_check_at: -10.0,
+            pending_restore,
         }
     }
 
@@ -1553,7 +1567,88 @@ impl BudgetApp {
         ui.label(RichText::new("The monthly summary uses the Monthly Costs spreadsheet layout and colors, with totals added at the bottom. Excel files open in Google Sheets and phone spreadsheet apps too.").weak());
         ui.add_space(10.0);
         ui.separator();
+        self.backup_section(ui);
+        ui.add_space(10.0);
+        ui.separator();
         self.bank_tab(ui);
+    }
+
+    fn backup_section(&mut self, ui: &mut egui::Ui) {
+        theme::section_title(ui, "💾", "Backup & restore");
+        #[cfg(target_os = "android")]
+        ui.label(theme::muted(format!(
+            "Every change is copied to Download/Budget/{} automatically (needs file access). It survives uninstalling the app.",
+            storage::AUTO_BACKUP_NAME
+        )).size(12.5));
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("💾 Back up now").clicked() {
+                let name = format!("Budget Backup {}.json", Local::now().format("%Y-%m-%d"));
+                let _ = storage::write_auto_backup(&self.budget);
+                self.save_bytes(ui.ctx(), &name, "Budget backup", "json", storage::backup_json(&self.budget).into_bytes());
+            }
+            #[cfg(not(target_os = "android"))]
+            if ui.button("📂 Restore from a backup...").clicked() {
+                if let Some(path) = rfd::FileDialog::new().add_filter("Budget backup", &["json"]).pick_file() {
+                    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                    match std::fs::read_to_string(&path) {
+                        Ok(text) => self.offer_restore(&name, &text),
+                        Err(e) => self.error(format!("Couldn't read {name}: {e}")),
+                    }
+                }
+            }
+            #[cfg(target_os = "android")]
+            if ui.button("📂 Restore from a backup").clicked() {
+                self.picker = Some(Picker::open(PickFor::Restore));
+            }
+        });
+        ui.label(theme::muted("Backups hold your budget, settings, daily budget, purchases, recipes and meal plan.").size(12.0));
+    }
+
+    fn offer_restore(&mut self, name: &str, text: &str) {
+        match storage::parse_backup(text) {
+            Ok(found) => self.pending_restore = Some((name.to_string(), found)),
+            Err(e) => self.error(format!("{name}: {e}")),
+        }
+    }
+
+    fn restore_window(&mut self, ctx: &egui::Context) {
+        let Some((name, (budget, purchases, created))) = self.pending_restore.take() else { return };
+        let (mut restore, mut cancel) = (false, false);
+        egui::Window::new("Restore your data?")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.label(format!("Found {name}{}.", if created.is_empty() { String::new() } else { format!(" from {created}") }));
+                ui.label(theme::muted(format!(
+                    "{} expenses, {} recipes, {} planned meals. This replaces what's in the app now (a copy of the current data is kept).",
+                    budget.expenses.len(),
+                    budget.food.recipes.len(),
+                    budget.food.plan.len()
+                )));
+                ui.horizontal(|ui| {
+                    if theme::primary_button(ui, "Restore").clicked() {
+                        restore = true;
+                    }
+                    if ui.button("Not now").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if restore {
+            match storage::restore(&budget, purchases.as_deref()) {
+                Ok(()) => {
+                    self.budget = budget;
+                    self.reload_purchases();
+                    self.widget_written.clear();
+                    self.meals_written.clear();
+                    self.info("Restored your data.");
+                }
+                Err(e) => self.error(format!("Couldn't restore: {e}")),
+            }
+        } else if !cancel {
+            self.pending_restore = Some((name, (budget, purchases, created)));
+        }
     }
 
     fn preview_import(&mut self, text: &str) {
@@ -1832,6 +1927,7 @@ enum PickFor {
     Budget,
     Statement,
     Food,
+    Restore,
 }
 
 /// A simple built-in file browser. Android has no native file dialog from Rust,
@@ -1870,7 +1966,7 @@ impl Picker {
                         dirs.push((path, name, true));
                     } else {
                         let lower = name.to_lowercase();
-                        if lower.ends_with(".csv") || lower.ends_with(".txt") {
+                        if lower.ends_with(".csv") || lower.ends_with(".txt") || lower.ends_with(".json") {
                             let modified = meta.and_then(|m| m.modified().ok()).unwrap_or(std::time::UNIX_EPOCH);
                             files.push((modified, (path, name, false)));
                         }
@@ -1928,6 +2024,7 @@ impl BudgetApp {
             PickFor::Budget => "Choose a budget CSV",
             PickFor::Statement => "Choose a bank statement",
             PickFor::Food => "Choose a recipes or meal plan CSV",
+            PickFor::Restore => "Choose a Budget backup (.json)",
         };
         egui::Window::new(title)
             .open(&mut open)
@@ -1994,6 +2091,7 @@ impl BudgetApp {
                     PickFor::Budget => self.preview_import(&text),
                     PickFor::Statement => self.add_statement(&name, &text),
                     PickFor::Food => self.import_food_csv(&name, &text),
+                    PickFor::Restore => self.offer_restore(&name, &text),
                 },
                 Err(e) => self.error(format!("Couldn't read {name}: {e}. {PERMISSION_HELP}")),
             }
@@ -2300,6 +2398,7 @@ impl eframe::App for BudgetApp {
         });
 
         self.editor_window(ctx);
+        self.restore_window(ctx);
         self.recipe_window(ctx);
         self.recipe_editor_window(ctx);
         self.delete_dialog(ctx);
@@ -2310,6 +2409,8 @@ impl eframe::App for BudgetApp {
             if let Err(e) = storage::save(&self.budget) {
                 self.error(format!("Couldn't save your data: {e}"));
             }
+            // Keep a copy outside the app's folder so a reinstall doesn't lose anything.
+            let _ = storage::write_auto_backup(&self.budget);
         }
         self.update_widget_file();
         if self.update_meals_file() {

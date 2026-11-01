@@ -68,6 +68,7 @@ keytool -genkeypair -keystore android/budget.keystore -alias androiddebugkey -ke
 - **File access:** Android only shows CSVs saved by other apps (your browser, Drive) to apps with "All files access". The Files and Bank tabs show a **Grant file access** button that opens that switch. You can also find it at Settings > Apps > Special app access > All files access > Budget.
 - **Importing:** tap "Choose a CSV file" (Files tab) or "Choose statement CSV" (Bank tab). A built-in browser lists CSV files in Downloads, Documents and other folders, newest first.
 - **Exporting:** CSVs are saved to `Download/Budget/` on your phone, where any file manager, email or Drive app can find them.
+- **Updates and backups:** new builds install over the old one and keep your data. The app also keeps `Download/Budget/Budget Auto-Backup.json` up to date, which survives an uninstall. After a reinstall it offers to restore it, or use Files > Backup & restore.
 - Amounts use drag/tap number fields. Text fields open the on-screen keyboard.
 
 ## Importing bank statements
